@@ -169,8 +169,8 @@ canvas { display:block; width:100%; height:100%; touch-action:none; }
     <button class="hb" id="bgrid" title="Toggle grid">⊞</button>
     <div class="hsep"></div>
     <div id="wt-row">
-      <span id="wt-label">Wall&nbsp;t:</span>
-      <input id="wt-input" type="number" value="4" min="1" max="24" step="0.25" title='Wall thickness (inches)'>
+      <span id="wt-label">Line&nbsp;t:</span>
+      <input id="wt-input" type="number" value="1" min="0.25" max="24" step="0.25" title='Line thickness (inches)'>
       <span id="wt-label2" style="font-size:10px;color:var(--muted)">"</span>
       <div class="hsep"></div>
     </div>
@@ -192,7 +192,9 @@ canvas { display:block; width:100%; height:100%; touch-action:none; }
 
   <div id="tb">
     <button class="tbtn on" data-tool="select"><span class="ico">↖</span>Select</button>
-    <button class="tbtn" data-tool="wall"><span class="ico">▬</span>Wall</button>
+    <button class="tbtn" data-tool="wall"><span class="ico">▬</span>Line</button>
+    <button class="tbtn" data-tool="rect"><span class="ico">▭</span>Rect</button>
+    <button class="tbtn" data-tool="circ"><span class="ico">◯</span>Circle</button>
     <button class="tbtn" data-tool="door"><span class="ico">🚪</span>Door</button>
     <button class="tbtn" data-tool="window"><span class="ico">🪟</span>Window</button>
     <button class="tbtn" data-tool="beam"><span class="ico">⬛</span>Beam</button>
@@ -243,19 +245,21 @@ const SNAP   = 0.25;        // inches – quarter inch grid
 const DZOOM  = 8;           // default pixels per inch
 const MINZ   = 0.5;
 const MAXZ   = 128;
-const DWALT  = 4;           // default wall thickness (inches)
+const DWALT  = 1;           // default wall/line thickness (inches)
 const SKEY   = 'bp_v3';
 const MXUNDO = 40;
 
 const T = { SEL:'select',WALL:'wall',DOOR:'door',WIN:'window',BEAM:'beam',
-            OUT:'outlet',COND:'conduit',LIGHT:'light',TXT:'text' };
+            OUT:'outlet',COND:'conduit',LIGHT:'light',TXT:'text',
+            RECT:'rect',CIRC:'circ' };
 
-const TLBL = { wall:'Wall',door:'Door',window:'Window',beam:'Support Beam',
-               outlet:'Outlet',conduit:'Conduit',light:'Light Fixture',text:'Label' };
+const TLBL = { wall:'Line',door:'Door',window:'Window',beam:'Support Beam',
+               outlet:'Outlet',conduit:'Conduit',light:'Light Fixture',text:'Label',
+               rect:'Rectangle',circ:'Circle' };
 
 const HINTS = {
   select:'Tap to select · Drag to move · Pinch/scroll to zoom · Dbl-tap to edit',
-  wall:'Drag to draw wall · Hold Shift for orthogonal',
+  wall:'Drag to draw line · Hold Shift for orthogonal · Edit angle in properties',
   door:'Drag to place door (sets width & direction)',
   window:'Drag along wall to define window',
   beam:'Drag to define support beam rectangle',
@@ -263,6 +267,8 @@ const HINTS = {
   conduit:'Click to add points · Double-click or Esc to finish',
   light:'Drag to define fluorescent light fixture',
   text:'Tap / click to place text label',
+  rect:'Drag to define rectangle (furniture, desk, table…)',
+  circ:'Drag from center outward to define circle (clearance, radius…)',
 };
 
 // ═══════════════════════════════════════════════════════════════
@@ -408,11 +414,26 @@ function anchorW(el){
 // ═══════════════════════════════════════════════════════════════
 function bounds(el){
   switch(el.type){
-    case 'wall': case 'window':
+    case 'wall': {
+      const t=el.t||DWALT;
+      const a=(el.angle||0)*Math.PI/180;
+      const ox=-Math.sin(a)*t, oy=Math.cos(a)*t;
+      return {
+        x1:Math.min(el.x1,el.x2,el.x1+ox,el.x2+ox),
+        y1:Math.min(el.y1,el.y2,el.y1+oy,el.y2+oy),
+        x2:Math.max(el.x1,el.x2,el.x1+ox,el.x2+ox),
+        y2:Math.max(el.y1,el.y2,el.y1+oy,el.y2+oy)
+      };
+    }
+    case 'window':
       return { x1:Math.min(el.x1,el.x2), y1:Math.min(el.y1,el.y2),
                x2:Math.max(el.x1,el.x2), y2:Math.max(el.y1,el.y2) };
     case 'beam': case 'light':
       return { x1:el.x, y1:el.y, x2:el.x+el.w, y2:el.y+el.h };
+    case 'rect':
+      return { x1:el.x, y1:el.y, x2:el.x+(el.w||0), y2:el.y+(el.h||0) };
+    case 'circ':
+      return { x1:el.x-(el.r||0), y1:el.y-(el.r||0), x2:el.x+(el.r||0), y2:el.y+(el.r||0) };
     case 'door': {
       const r=el.width||30;
       return { x1:el.x-r, y1:el.y-r, x2:el.x+r, y2:el.y+r };
@@ -455,13 +476,27 @@ function ptSegD(px,py,ax,ay,bx,by){
 function hitEl(el, wx2, wy2){
   const pad=Math.max(0.3, 8/VP.z);
   switch(el.type){
-    case 'wall':   return ptSegD(wx2,wy2,el.x1,el.y1,el.x2,el.y2) <= (el.t||DWALT)/2 + pad;
+    case 'wall': {
+      const t=el.t||DWALT;
+      const seg=ptSegD(wx2,wy2,el.x1,el.y1,el.x2,el.y2);
+      if(seg>t+pad) return false;
+      const a=(el.angle||0)*Math.PI/180;
+      const ox=-Math.sin(a), oy=Math.cos(a);
+      const dx=el.x2-el.x1, dy=el.y2-el.y1, len=Math.hypot(dx,dy);
+      if(len<0.001) return seg<=pad;
+      const tu=((wx2-el.x1)*dx+(wy2-el.y1)*dy)/(len*len);
+      const tc=Math.max(0,Math.min(1,tu));
+      const nx=el.x1+tc*dx, ny=el.y1+tc*dy;
+      const comp=(wx2-nx)*ox+(wy2-ny)*oy;
+      return comp>=-pad&&comp<=t+pad;
+    }
     case 'window': return ptSegD(wx2,wy2,el.x1,el.y1,el.x2,el.y2) <= pad*2.5;
     case 'door':   return Math.hypot(wx2-el.x,wy2-el.y) <= (el.width||30)+pad;
-    case 'beam': case 'light': {
+    case 'beam': case 'light': case 'rect': {
       const b=bounds(el);
       return b&&wx2>=b.x1-pad&&wx2<=b.x2+pad&&wy2>=b.y1-pad&&wy2<=b.y2+pad;
     }
+    case 'circ':   return Math.hypot(wx2-el.x,wy2-el.y)<=(el.r||0)+pad;
     case 'outlet': return Math.hypot(wx2-el.x,wy2-el.y) <= 1.5+pad;
     case 'conduit':{
       if(!el.pts?.length) return false;
@@ -604,6 +639,8 @@ function drawEl(el, p, sel, hov){
     case 'conduit': rConduit(el,clr,sel); break;
     case 'light':   rLight(el,clr);   break;
     case 'text':    rText(el,clr,sel,p); break;
+    case 'rect':    rRect(el,clr);    break;
+    case 'circ':    rCirc(el,clr);    break;
   }
   // Label overlay (non-text elements)
   if(el.lbl && el.type!=='text'){
@@ -631,11 +668,14 @@ function rWall(el,clr){
   const tk=scl(el.t||DWALT);
   const dx=x2-x1,dy=y2-y1,len=Math.hypot(dx,dy);
   if(len<1) return;
-  const a=Math.atan2(dy,dx), cx=(x1+x2)/2, cy=(y1+y2)/2;
+  const a=(el.angle||0)*Math.PI/180;
+  const ox=-Math.sin(a)*tk, oy=Math.cos(a)*tk;
   ctx.save();
-  ctx.translate(cx,cy); ctx.rotate(a);
   ctx.fillStyle=clr;
-  ctx.fillRect(-len/2,-tk/2,len,tk);
+  ctx.beginPath();
+  ctx.moveTo(x1,y1); ctx.lineTo(x2,y2);
+  ctx.lineTo(x2+ox,y2+oy); ctx.lineTo(x1+ox,y1+oy);
+  ctx.closePath(); ctx.fill();
   ctx.restore();
 }
 
@@ -774,6 +814,29 @@ function rText(el,clr,sel,p){
   ctx.restore();
 }
 
+function rRect(el,clr){
+  const px=scx(el.x),py=scy(el.y),pw=scl(el.w||0),ph=scl(el.h||0);
+  if(Math.abs(pw)<1||Math.abs(ph)<1) return;
+  ctx.save();
+  ctx.strokeStyle=clr; ctx.lineWidth=1.5;
+  ctx.fillStyle=UI.bp?'rgba(80,200,120,.07)':'rgba(0,120,60,.05)';
+  ctx.fillRect(px,py,pw,ph);
+  ctx.strokeRect(px,py,pw,ph);
+  ctx.restore();
+}
+
+function rCirc(el,clr){
+  if(!(el.r>0)) return;
+  const px=scx(el.x),py=scy(el.y),pr=scl(el.r);
+  if(pr<1) return;
+  ctx.save();
+  ctx.strokeStyle=clr; ctx.lineWidth=1.5;
+  ctx.fillStyle=UI.bp?'rgba(80,150,255,.06)':'rgba(30,80,200,.04)';
+  ctx.beginPath(); ctx.arc(px,py,pr,0,Math.PI*2);
+  ctx.fill(); ctx.stroke();
+  ctx.restore();
+}
+
 // ── Preview while drawing ──
 function drawPrev(d,p){
   const clr=p.prev;
@@ -785,15 +848,20 @@ function drawPrev(d,p){
       const tk=scl(d.t||DWALT);
       const dx=x2-x1,dy=y2-y1,len=Math.hypot(dx,dy);
       if(len>0){
-        const a=Math.atan2(dy,dx),cx=(x1+x2)/2,cy=(y1+y2)/2;
-        ctx.save(); ctx.translate(cx,cy); ctx.rotate(a);
+        const a=(d.angle||0)*Math.PI/180;
+        const ox=-Math.sin(a)*tk, oy=Math.cos(a)*tk;
+        ctx.save();
         ctx.fillStyle=clr+'88';
-        ctx.fillRect(-len/2,-tk/2,len,tk);
+        ctx.beginPath();
+        ctx.moveTo(x1,y1); ctx.lineTo(x2,y2);
+        ctx.lineTo(x2+ox,y2+oy); ctx.lineTo(x1+ox,y1+oy);
+        ctx.closePath(); ctx.fill();
         ctx.restore();
         const wLen=Math.hypot(d.x2-d.x1,d.y2-d.y1);
+        const mx=(x1+x2)/2, my=(y1+y2)/2;
         ctx.setLineDash([]); ctx.fillStyle=clr;
         ctx.font='11px sans-serif'; ctx.textAlign='center'; ctx.textBaseline='bottom';
-        ctx.fillText(fmtIn(wLen),cx,cy-tk/2-4);
+        ctx.fillText(fmtIn(wLen),mx,my-4);
       }
       break;
     }
@@ -830,6 +898,27 @@ function drawPrev(d,p){
     }
     case 'outlet':{
       ctx.beginPath(); ctx.arc(scx(d.x),scy(d.y),Math.max(6,VP.z*1.5),0,Math.PI*2); ctx.stroke();
+      break;
+    }
+    case 'rect':{
+      const px2=scx(d.x),py2=scy(d.y),pw2=scl(d.w),ph2=scl(d.h);
+      ctx.fillStyle=clr+'33'; ctx.fillRect(px2,py2,pw2,ph2);
+      ctx.strokeRect(px2,py2,pw2,ph2);
+      if(Math.abs(d.w)>=SNAP&&Math.abs(d.h)>=SNAP){
+        ctx.setLineDash([]); ctx.fillStyle=clr;
+        ctx.font='10px sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+        ctx.fillText(`${fmtIn(Math.abs(d.w))} × ${fmtIn(Math.abs(d.h))}`,px2+pw2/2,py2+ph2/2);
+      }
+      break;
+    }
+    case 'circ':{
+      if(d.r>0){
+        const pr=scl(d.r);
+        ctx.beginPath(); ctx.arc(scx(d.x),scy(d.y),pr,0,Math.PI*2); ctx.stroke();
+        ctx.setLineDash([]); ctx.fillStyle=clr;
+        ctx.font='10px sans-serif'; ctx.textAlign='center'; ctx.textBaseline='bottom';
+        ctx.fillText('r='+fmtIn(d.r),scx(d.x),scy(d.y)-pr-4);
+      }
       break;
     }
   }
@@ -986,7 +1075,7 @@ function toolDown(cwx2,cwy2){
   switch(UI.tool){
     case T.SEL:   selDown(cwx2,cwy2); break;
     case T.WALL:
-      UI.draw={type:'wall',x1:cwx2,y1:cwy2,x2:cwx2,y2:cwy2,t:UI.defWallT}; break;
+      UI.draw={type:'wall',x1:cwx2,y1:cwy2,x2:cwx2,y2:cwy2,t:UI.defWallT,angle:0}; break;
     case T.DOOR:
       UI.draw={type:'door',x:cwx2,y:cwy2,width:30,rot:0,flip:false}; break;
     case T.WIN:
@@ -1002,6 +1091,10 @@ function toolDown(cwx2,cwy2){
       UI.condPts.push({x:cwx2,y:cwy2}); break;
     case T.TXT:
       showTextModal(cwx2,cwy2); break;
+    case T.RECT:
+      UI.draw={type:'rect',x:cwx2,y:cwy2,w:0,h:0}; break;
+    case T.CIRC:
+      UI.draw={type:'circ',x:cwx2,y:cwy2,r:0}; break;
   }
 }
 
@@ -1030,6 +1123,10 @@ function toolDrag(cwx2,cwy2,dx,dy){
       if(UI.draw){ UI.draw.x2=cwx2; UI.draw.y2=cwy2; } break;
     case T.BEAM: case T.LIGHT:
       if(UI.draw){ UI.draw.w=cwx2-UI.draw.x; UI.draw.h=cwy2-UI.draw.y; } break;
+    case T.RECT:
+      if(UI.draw){ UI.draw.w=cwx2-UI.draw.x; UI.draw.h=cwy2-UI.draw.y; } break;
+    case T.CIRC:
+      if(UI.draw){ UI.draw.r=Math.max(SNAP,snap1(Math.hypot(cwx2-UI.draw.x,cwy2-UI.draw.y))); } break;
   }
 }
 
@@ -1039,7 +1136,7 @@ function toolUp(cwx2,cwy2,moved){
     case T.WALL:
       if(UI.draw&&Math.hypot(UI.draw.x2-UI.draw.x1,UI.draw.y2-UI.draw.y1)>=SNAP){
         pushUndo();
-        addEl('wall',{x1:UI.draw.x1,y1:UI.draw.y1,x2:UI.draw.x2,y2:UI.draw.y2,t:UI.draw.t});
+        addEl('wall',{x1:UI.draw.x1,y1:UI.draw.y1,x2:UI.draw.x2,y2:UI.draw.y2,t:UI.draw.t,angle:0});
       }
       UI.draw=null; break;
     case T.DOOR:
@@ -1062,6 +1159,20 @@ function toolUp(cwx2,cwy2,moved){
         const nw=Math.abs(UI.draw.w), nh=Math.abs(UI.draw.h);
         const extra=UI.tool===T.LIGHT?{tubes:2}:{};
         addEl(UI.tool===T.LIGHT?'light':'beam',{x:nx,y:ny,w:nw,h:nh,...extra});
+      }
+      UI.draw=null; break;
+    case T.RECT:
+      if(UI.draw&&Math.abs(UI.draw.w)>=SNAP&&Math.abs(UI.draw.h)>=SNAP){
+        pushUndo();
+        const nx2=Math.min(UI.draw.x,UI.draw.x+UI.draw.w);
+        const ny2=Math.min(UI.draw.y,UI.draw.y+UI.draw.h);
+        addEl('rect',{x:nx2,y:ny2,w:Math.abs(UI.draw.w),h:Math.abs(UI.draw.h)});
+      }
+      UI.draw=null; break;
+    case T.CIRC:
+      if(UI.draw&&UI.draw.r>=SNAP){
+        pushUndo();
+        addEl('circ',{x:UI.draw.x,y:UI.draw.y,r:UI.draw.r});
       }
       UI.draw=null; break;
   }
@@ -1141,13 +1252,18 @@ function showPP(el){
   document.getElementById('pptitle').textContent = TLBL[el.type]||el.type;
   document.getElementById('ppfields').innerHTML  = buildPPF(el);
   document.getElementById('pp').classList.add('open');
+  let ppUndoPushed = false;
   // Bind changes
   document.querySelectorAll('#ppfields [data-p]').forEach(inp=>{
-    const ev = inp.type==='checkbox'?'change':['text','textarea'].includes(inp.type)?'input':'input';
+    const ev = inp.type==='checkbox'?'change':'input';
     inp.addEventListener(ev,()=>{
+      if(!ppUndoPushed){ pushUndo(); ppUndoPushed=true; }
       let v;
       if(inp.type==='checkbox') v=inp.checked;
-      else if(inp.type==='number') v=parseFloat(inp.value)||0;
+      else if(inp.type==='number'){
+        v=parseFloat(inp.value)||0;
+        if(['x','y','x1','y1','x2','y2'].includes(inp.dataset.p)) v=snap1(v);
+      }
       else v=inp.value;
       setEl(el.id,{[inp.dataset.p]:v});
     });
@@ -1163,8 +1279,21 @@ function buildPPF(el){
   const ci=(p,v)=>`<input class="pck" type="checkbox" data-p="${p}" ${v?'checked':''}>`;
   let h='';
   h+=row('Label', ti('lbl',el.lbl,'Optional label'));
+  // Position fields
+  if(el.type==='wall'||el.type==='window'){
+    h+=row('X1"', ni('x1',el.x1??0,-9999,9999));
+    h+=row('Y1"', ni('y1',el.y1??0,-9999,9999));
+    h+=row('X2"', ni('x2',el.x2??0,-9999,9999));
+    h+=row('Y2"', ni('y2',el.y2??0,-9999,9999));
+  } else if(el.type!=='conduit'){
+    h+=row('X"', ni('x',el.x??0,-9999,9999));
+    h+=row('Y"', ni('y',el.y??0,-9999,9999));
+  }
   switch(el.type){
-    case 'wall':   h+=row('Thickness"', ni('t',el.t??DWALT,1,24)); break;
+    case 'wall':
+      h+=row('Thickness"', ni('t',el.t??DWALT,0.25,24));
+      h+=row('Angle°',     ni('angle',el.angle??0,0,360,90));
+      break;
     case 'door':
       h+=row('Width"',    ni('width',el.width??30,12,72));
       h+=row('Rotation°', ni('rot',el.rot??0,-360,360,15));
@@ -1173,6 +1302,13 @@ function buildPPF(el){
       h+=row('Width"',  ni('w',el.w??12,1,600));
       h+=row('Height"', ni('h',el.h??12,1,600));
       if(el.type==='light') h+=row('Tubes', ni('tubes',el.tubes??2,1,8,1));
+      break;
+    case 'rect':
+      h+=row('Width"',  ni('w',el.w??24,0.25,600));
+      h+=row('Height"', ni('h',el.h??24,0.25,600));
+      break;
+    case 'circ':
+      h+=row('Radius"', ni('r',el.r??12,0.25,600));
       break;
     case 'outlet': h+=row('Rotation°', ni('rot',el.rot??0,0,360,45)); break;
     case 'text':
@@ -1279,12 +1415,14 @@ function drawExport(ectx, ox, oy, z){
       case 'wall':{
         const x1=esx(el.x1),y1=esy(el.y1),x2=esx(el.x2),y2=esy(el.y2);
         const tk=esl(el.t||DWALT);
-        const dx=x2-x1,dy=y2-y1,len=Math.hypot(dx,dy);
+        const len=Math.hypot(x2-x1,y2-y1);
         if(len<1){ectx.restore();continue;}
-        const a=Math.atan2(dy,dx),cx=(x1+x2)/2,cy=(y1+y2)/2;
-        ectx.save();ectx.translate(cx,cy);ectx.rotate(a);
-        ectx.fillRect(-len/2,-tk/2,len,tk);
-        ectx.restore(); break;
+        const a=(el.angle||0)*Math.PI/180;
+        const ox=-Math.sin(a)*tk, oy=Math.cos(a)*tk;
+        ectx.beginPath();
+        ectx.moveTo(x1,y1); ectx.lineTo(x2,y2);
+        ectx.lineTo(x2+ox,y2+oy); ectx.lineTo(x1+ox,y1+oy);
+        ectx.closePath(); ectx.fill(); break;
       }
       case 'door':{
         const hx=esx(el.x),hy=esy(el.y),r=esl(el.width||30);
@@ -1361,6 +1499,23 @@ function drawExport(ectx, ox, oy, z){
           for(let i=1;i<=tubes;i++){ const tx=-pw/2+i*sp2;ectx.beginPath();ectx.moveTo(tx,-ph/2+4);ectx.lineTo(tx,ph/2-4);ectx.stroke(); }
         }
         ectx.restore(); break;
+      }
+      case 'rect':{
+        const px=esx(el.x),py=esy(el.y),pw=esl(el.w||0),ph=esl(el.h||0);
+        if(Math.abs(pw)<1||Math.abs(ph)<1){ectx.restore();continue;}
+        ectx.fillStyle='rgba(0,0,0,.04)';
+        ectx.fillRect(px,py,pw,ph);
+        ectx.lineWidth=1.5; ectx.strokeStyle='#000';
+        ectx.strokeRect(px,py,pw,ph);
+        break;
+      }
+      case 'circ':{
+        if(!(el.r>0)){ectx.restore();continue;}
+        const px=esx(el.x),py=esy(el.y),pr=esl(el.r);
+        ectx.fillStyle='rgba(0,0,0,.04)';
+        ectx.beginPath(); ectx.arc(px,py,pr,0,Math.PI*2);
+        ectx.fill(); ectx.lineWidth=1.5; ectx.strokeStyle='#000'; ectx.stroke();
+        break;
       }
       case 'text':{
         const px=esx(el.x),py=esy(el.y);
@@ -1460,11 +1615,11 @@ function generateSVG(){
       case 'wall':{
         const x1=esx(el.x1),y1=esy(el.y1),x2=esx(el.x2),y2=esy(el.y2);
         const tk=esl(el.t||DWALT);
-        const dx=x2-x1,dy=y2-y1,len=Math.hypot(dx,dy);
+        const len=Math.hypot(x2-x1,y2-y1);
         if(len<1) break;
-        const a=Math.atan2(dy,dx)*180/Math.PI;
-        const cx=(x1+x2)/2,cy=(y1+y2)/2;
-        s+=`<rect x="${cx-len/2}" y="${cy-tk/2}" width="${len}" height="${tk}" transform="rotate(${a},${cx},${cy})" fill="black"/>`;
+        const a=(el.angle||0)*Math.PI/180;
+        const ox2=-Math.sin(a)*tk, oy2=Math.cos(a)*tk;
+        s+=`<polygon points="${x1},${y1} ${x2},${y2} ${x2+ox2},${y2+oy2} ${x1+ox2},${y1+oy2}" fill="black"/>`;
         break;
       }
       case 'door':{
@@ -1538,6 +1693,18 @@ function generateSVG(){
           const sp2=pw/(tubes+1);
           for(let i=1;i<=tubes;i++){const tx=px+i*sp2;s+=`<line x1="${tx}" y1="${py+4}" x2="${tx}" y2="${py+ph-4}" stroke="black" stroke-width="1.5"/>`;}
         }
+        break;
+      }
+      case 'rect':{
+        const px=esx(el.x),py=esy(el.y),pw=esl(el.w||0),ph=esl(el.h||0);
+        if(!pw||!ph) break;
+        s+=`<rect x="${px}" y="${py}" width="${pw}" height="${ph}" fill="rgba(0,0,0,0.04)" stroke="black" stroke-width="1.5"/>`;
+        break;
+      }
+      case 'circ':{
+        if(!(el.r>0)) break;
+        const px=esx(el.x),py=esy(el.y),pr=esl(el.r);
+        s+=`<circle cx="${px}" cy="${py}" r="${pr}" fill="rgba(0,0,0,0.04)" stroke="black" stroke-width="1.5"/>`;
         break;
       }
       case 'text':{
