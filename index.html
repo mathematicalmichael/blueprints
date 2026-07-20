@@ -121,6 +121,7 @@ canvas { display:block; width:100%; height:100%; touch-action:none; }
 .pb { flex:1; padding:7px; border-radius:5px; border:none; font-size:12px; cursor:pointer; min-height:34px; }
 .pbdel { background:#b03028; color:#fff; }
 .pbsec { background:rgba(255,255,255,.1); color:var(--main); }
+.pblock { background:#c9922e; color:#1a1200; }
 
 /* ── Modal ── */
 .mo {
@@ -213,7 +214,8 @@ canvas { display:block; width:100%; height:100%; touch-action:none; }
   </div>
   <div id="ppfields"></div>
   <div class="pbr">
-    <button class="pb pbsec" id="ppedit">✏ Edit Label</button>
+    <button class="pb pbsec" id="pplock">🔒 Lock</button>
+    <button class="pb pbsec" id="ppedit">✏ Edit</button>
     <button class="pb pbdel" id="ppdel">Delete</button>
   </div>
 </div>
@@ -258,7 +260,7 @@ const TLBL = { wall:'Line',door:'Door',window:'Window',beam:'Support Beam',
                rect:'Rectangle',circ:'Circle' };
 
 const HINTS = {
-  select:'Tap to select · Drag to move · Pinch/scroll to zoom · Dbl-tap to edit · Lock in properties',
+  select:'Tap to select · Drag to move · Dbl-tap to edit · L = lock · Ctrl+C/V = copy/paste',
   wall:'Drag to draw · Shift = orthogonal · Snaps to grid · Set exact Length/Thickness in properties',
   door:'Drag to place door (sets width & direction)',
   window:'Drag along wall to define window',
@@ -289,6 +291,7 @@ let UI = {
 };
 
 let undos=[], redos=[];
+let clip=null;                       // copy/paste clipboard (single element)
 
 // ═══════════════════════════════════════════════════════════════
 // CANVAS
@@ -1331,6 +1334,7 @@ function showPP(el){
   document.getElementById('pptitle').textContent = TLBL[el.type]||el.type;
   document.getElementById('ppfields').innerHTML  = buildPPF(el);
   document.getElementById('pp').classList.add('open');
+  updateLockBtn(el);
   let ppUndoPushed = false;
   const pushOnce=()=>{ if(!ppUndoPushed){ pushUndo(); ppUndoPushed=true; } };
   // Bind changes
@@ -1433,7 +1437,45 @@ function buildPPF(el){
 
 function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 
+function updateLockBtn(el){
+  const b=document.getElementById('pplock');
+  if(!b) return;
+  const locked=!!(el&&el.locked);
+  b.textContent=locked?'🔓 Unlock':'🔒 Lock';
+  b.classList.toggle('pblock', locked);
+}
+
+function toggleLock(id){
+  const el=getEl(id); if(!el) return;
+  pushUndo();
+  setEl(id,{locked:!el.locked});
+  const e2=getEl(id);
+  updateLockBtn(e2);
+  const chk=document.querySelector('#ppfields [data-p="locked"]');
+  if(chk) chk.checked=!!(e2&&e2.locked);
+}
+
+// ── Copy / paste ──
+function copySel(){
+  const el=UI.selId?getEl(UI.selId):null;
+  if(!el) return;
+  clip=JSON.parse(JSON.stringify(el));
+}
+function pasteClip(){
+  if(!clip) return;
+  pushUndo();
+  const {id, ...props}=clip;
+  props.locked=false;                 // pasted copy starts movable
+  const el=addEl(clip.type, props);
+  moveEl(el, 12, 12);                 // offset 1' so the copy is visible
+  saveL();
+  UI.selId=el.id; UI.tool=T.SEL;
+  document.querySelectorAll('.tbtn').forEach(b=>b.classList.toggle('on',b.dataset.tool===T.SEL));
+  showPP(el); render();
+}
+
 document.getElementById('ppclose').addEventListener('click', closePP);
+document.getElementById('pplock').addEventListener('click',()=>{ if(UI.selId) toggleLock(UI.selId); });
 document.getElementById('ppdel').addEventListener('click',()=>{ if(UI.selId) delEl(UI.selId); });
 document.getElementById('ppedit').addEventListener('click',()=>{
   const el=UI.selId?getEl(UI.selId):null;
@@ -1921,11 +1963,14 @@ document.addEventListener('keydown', e=>{
 
   if((e.ctrlKey||e.metaKey)&&e.key==='z'){ e.preventDefault(); undo(); return; }
   if((e.ctrlKey||e.metaKey)&&(e.key==='y'||(e.shiftKey&&e.key==='Z'))){ e.preventDefault(); redo(); return; }
+  if((e.ctrlKey||e.metaKey)&&(e.key==='c'||e.key==='C')){ e.preventDefault(); copySel(); return; }
+  if((e.ctrlKey||e.metaKey)&&(e.key==='v'||e.key==='V')){ e.preventDefault(); pasteClip(); return; }
   if(e.key==='Escape'){
     if(UI.condPts) finishCond();
     UI.draw=null; closePP(); closeModal(); reqRender(); return;
   }
   if((e.key==='Delete'||e.key==='Backspace')&&UI.selId){ delEl(UI.selId); return; }
+  if(!e.ctrlKey&&!e.metaKey&&(e.key==='l'||e.key==='L')&&UI.selId){ e.preventDefault(); toggleLock(UI.selId); return; }
   if(e.key==='+'||e.key==='='){ VP.z=Math.min(MAXZ,VP.z*1.2); saveL(); reqRender(); }
   if(e.key==='-'){ VP.z=Math.max(MINZ,VP.z/1.2); saveL(); reqRender(); }
   UI.shift=e.shiftKey;
