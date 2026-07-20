@@ -116,6 +116,12 @@ canvas { display:block; width:100%; height:100%; touch-action:none; }
 }
 #lp.open { transform:translateX(0); }
 
+/* ── Layers toolbar (collapse/expand/hide/show all) ── */
+.lptools { display:flex; flex-wrap:wrap; gap:4px; margin-bottom:8px; }
+.ltbtn { flex:1 1 auto; min-width:0; background:rgba(255,255,255,.07); border:1px solid var(--border);
+         color:var(--main); border-radius:5px; padding:5px 4px; font-size:10px; cursor:pointer; white-space:nowrap; }
+.ltbtn:hover { background:rgba(79,195,247,.2); }
+
 /* ── Layers tree (Photoshop-style) ── */
 .lgroup { display:flex; align-items:center; gap:3px; padding:4px; margin-top:5px; position:relative;
           border:1px solid var(--border); border-radius:6px; background:rgba(255,255,255,.05); }
@@ -279,8 +285,14 @@ canvas { display:block; width:100%; height:100%; touch-action:none; }
     <span class="pptitle">Layers</span>
     <button class="ppc" id="lpclose">✕</button>
   </div>
-  <div style="font-size:10px;color:var(--muted);margin-bottom:8px">
+  <div style="font-size:10px;color:var(--muted);margin-bottom:6px">
     Tap a name = active layer · double-tap = rename · drag ⠿ to reorder · 👁 hide · 🔒 lock (group or object)
+  </div>
+  <div class="lptools">
+    <button class="ltbtn" data-lact="collapseAll" title="Collapse all groups">⊟ Collapse all</button>
+    <button class="ltbtn" data-lact="expandAll" title="Expand all groups">⊞ Expand all</button>
+    <button class="ltbtn" data-lact="hideAll" title="Hide all groups">🚫 Hide all</button>
+    <button class="ltbtn" data-lact="showAll" title="Show everything">👁 Show all</button>
   </div>
   <div id="lplist"></div>
   <div class="pbr">
@@ -391,17 +403,17 @@ const wcy = (sy) => (sy - cv.height/2)/VP.z + VP.y;
 const snap1 = (v)    => Math.round(v / SNAP) * SNAP;
 const snapP  = (x,y) => [snap1(x), snap1(y)];
 
-// Adaptive grid: returns [minor, major] spacing in inches for the current zoom.
-// As you zoom out the increments grow: 1' → 5' → 10' … so the outer perimeter
-// is easy to lay out on mobile.
+// Adaptive grid: returns [minor, mid, major] spacing in inches for the current
+// zoom — three nested tiers with distinct line weights. As you zoom out the
+// increments grow (¼" → 1" → 1' → 5' → 10' …) so the perimeter is easy to lay
+// out on mobile while inch detail is available up close.
 function gridSteps(z){
-  if(z>=32)   return [0.25, 12];   // ¼"  minor · 1' major
-  if(z>=16)   return [0.5,  12];   // ½"  minor · 1' major
-  if(z>=6)    return [1,    12];   // 1"  minor · 1' major
-  if(z>=2)    return [6,    12];   // 6"  minor · 1' major
-  if(z>=0.9)  return [12,   60];   // 1'  minor · 5' major
-  if(z>=0.45) return [60,  120];   // 5'  minor · 10' major
-  return             [120, 600];   // 10' minor · 50' major
+  if(z>=24)   return [0.25, 1,   12];   // ¼"  · 1"  · 1'
+  if(z>=8)    return [1,    6,   12];   // 1"  · 6"  · 1'
+  if(z>=3)    return [6,    12,  60];   // 6"  · 1'  · 5'
+  if(z>=1.2)  return [12,   60,  120];  // 1'  · 5'  · 10'
+  if(z>=0.5)  return [60,   120, 600];  // 5'  · 10' · 50'
+  return             [120,  600, 1200]; // 10' · 50' · 100'
 }
 // Pointer snap increment follows the finest visible grid cell so drawing/dragging
 // snaps to whatever the user can actually see.
@@ -459,8 +471,13 @@ function fmtIn(inches) {
 // ═══════════════════════════════════════════════════════════════
 // LOCAL STORAGE
 // ═══════════════════════════════════════════════════════════════
+function persistState(){
+  const lp=document.getElementById('lp');
+  const ui={ lpOpen: !!(lp && lp.classList.contains('open')), activeLayer: UI.activeLayer };
+  try{ localStorage.setItem(SKEY, JSON.stringify({S,VP,ui})); }catch(_){}
+}
 function saveL(){
-  try{ localStorage.setItem(SKEY, JSON.stringify({S,VP})); }catch(_){}
+  persistState();
   lpRefresh();   // keep the layers panel in sync with canvas edits
 }
 // Rebuild the layers tree if it's open (but never while a name is being edited).
@@ -471,10 +488,15 @@ function lpRefresh(){
 function loadL(){
   try{
     const raw=localStorage.getItem(SKEY);
-    if(!raw) return;
-    const d=JSON.parse(raw);
-    if(d.S){ S={ els:[], nid:1, ...d.S }; }
-    if(d.VP){ VP={...VP,...d.VP}; }
+    if(raw){
+      const d=JSON.parse(raw);
+      if(d.S){ S={ els:[], nid:1, ...d.S }; }
+      if(d.VP){ VP={...VP,...d.VP}; }
+      if(d.ui){
+        if(d.ui.activeLayer) UI.activeLayer=d.ui.activeLayer;
+        UI._restoreLPOpen=!!d.ui.lpOpen;   // reopen the panel after init if it was open
+      }
+    }
   }catch(_){}
   ensureLayers();
 }
@@ -761,13 +783,13 @@ function reqRender(){ if(!rafPending){rafPending=true;requestAnimationFrame(()=>
 // Color palette
 function pal(){
   return UI.bp ? {
-    bg:'#0d1b2a', gMin:'rgba(79,195,247,.1)', gMaj:'rgba(79,195,247,.25)',
-    gAx:'rgba(79,195,247,.4)', gTxt:'rgba(79,195,247,.32)',
+    bg:'#0d1b2a', gMin:'rgba(79,195,247,.08)', gMid:'rgba(79,195,247,.16)', gMaj:'rgba(79,195,247,.3)',
+    gAx:'rgba(79,195,247,.45)', gTxt:'rgba(79,195,247,.32)', gTxt2:'rgba(79,195,247,.22)',
     line:'#9ad4f5', wFill:'#c8e8ff', sel:'#ff6b35', hov:'#ffe066',
     lbl:'rgba(180,225,255,.82)', prev:'#ffe066',
   } : {
-    bg:'#f2f2f2', gMin:'rgba(0,0,0,.07)', gMaj:'rgba(0,0,0,.16)',
-    gAx:'rgba(0,0,0,.3)', gTxt:'rgba(0,0,0,.28)',
+    bg:'#f2f2f2', gMin:'rgba(0,0,0,.06)', gMid:'rgba(0,0,0,.11)', gMaj:'rgba(0,0,0,.2)',
+    gAx:'rgba(0,0,0,.32)', gTxt:'rgba(0,0,0,.28)', gTxt2:'rgba(0,0,0,.18)',
     line:'#111', wFill:'#000', sel:'#e94560', hov:'#0066cc',
     lbl:'rgba(0,0,0,.72)', prev:'#0055cc',
   };
@@ -787,27 +809,31 @@ function render(){
 // ── Grid ──
 function drawGrid(W,H,p){
   const z=VP.z;
-  const [mIn,majIn]=gridSteps(z);
-
+  const [mIn,midIn,majIn]=gridSteps(z);
   const wL=wcx(0),wT=wcy(0),wR=wcx(W),wB=wcy(H);
+  const mult=(v,step)=>Math.abs(v/step - Math.round(v/step))<1e-6;   // v is a multiple of step?
 
   ctx.save();
-  ctx.strokeStyle=p.gMin; ctx.lineWidth=0.5;
-  ctx.beginPath();
-  for(let x=Math.floor(wL/mIn)*mIn;x<=wR;x+=mIn){
-    if(Math.abs(x%majIn)>0.001){ctx.moveTo(scx(x),0);ctx.lineTo(scx(x),H);}
-  }
-  for(let y=Math.floor(wT/mIn)*mIn;y<=wB;y+=mIn){
-    if(Math.abs(y%majIn)>0.001){ctx.moveTo(0,scy(y));ctx.lineTo(W,scy(y));}
-  }
+
+  // Tier 1 — minor (lightest). Skip lines that also belong to the mid tier.
+  ctx.strokeStyle=p.gMin; ctx.lineWidth=0.5; ctx.beginPath();
+  for(let x=Math.ceil(wL/mIn)*mIn;x<=wR;x+=mIn){ if(!mult(x,midIn)){ ctx.moveTo(scx(x),0);ctx.lineTo(scx(x),H);} }
+  for(let y=Math.ceil(wT/mIn)*mIn;y<=wB;y+=mIn){ if(!mult(y,midIn)){ ctx.moveTo(0,scy(y));ctx.lineTo(W,scy(y));} }
   ctx.stroke();
 
-  ctx.strokeStyle=p.gMaj; ctx.lineWidth=0.75;
-  ctx.beginPath();
-  for(let x=Math.floor(wL/majIn)*majIn;x<=wR;x+=majIn){ ctx.moveTo(scx(x),0);ctx.lineTo(scx(x),H); }
-  for(let y=Math.floor(wT/majIn)*majIn;y<=wB;y+=majIn){ ctx.moveTo(0,scy(y));ctx.lineTo(W,scy(y)); }
+  // Tier 2 — intermediate (medium). Skip lines that also belong to the major tier.
+  ctx.strokeStyle=p.gMid; ctx.lineWidth=0.75; ctx.beginPath();
+  for(let x=Math.ceil(wL/midIn)*midIn;x<=wR;x+=midIn){ if(!mult(x,majIn)){ ctx.moveTo(scx(x),0);ctx.lineTo(scx(x),H);} }
+  for(let y=Math.ceil(wT/midIn)*midIn;y<=wB;y+=midIn){ if(!mult(y,majIn)){ ctx.moveTo(0,scy(y));ctx.lineTo(W,scy(y));} }
   ctx.stroke();
 
+  // Tier 3 — major (heaviest).
+  ctx.strokeStyle=p.gMaj; ctx.lineWidth=1; ctx.beginPath();
+  for(let x=Math.ceil(wL/majIn)*majIn;x<=wR;x+=majIn){ ctx.moveTo(scx(x),0);ctx.lineTo(scx(x),H); }
+  for(let y=Math.ceil(wT/majIn)*majIn;y<=wB;y+=majIn){ ctx.moveTo(0,scy(y));ctx.lineTo(W,scy(y)); }
+  ctx.stroke();
+
+  // Axes
   ctx.strokeStyle=p.gAx; ctx.lineWidth=1; ctx.setLineDash([5,5]);
   ctx.beginPath();
   const ox=scx(0), oy2=scy(0);
@@ -815,12 +841,26 @@ function drawGrid(W,H,p){
   if(oy2>0&&oy2<H){ctx.moveTo(0,oy2);ctx.lineTo(W,oy2);}
   ctx.stroke(); ctx.setLineDash([]);
 
+  // Inch labels on the mid tier when it is sub-foot and spaced out enough.
+  if(midIn<12 && midIn*z>=26){
+    ctx.fillStyle=p.gTxt2; ctx.font='8px monospace';
+    for(let x=Math.ceil(wL/midIn)*midIn;x<=wR;x+=midIn){
+      if(mult(x,majIn)) continue;
+      const px=scx(x); if(px>15&&px<W-5) ctx.fillText((((Math.round(x)%12)+12)%12)+'"', px+2, 20);
+    }
+    for(let y=Math.ceil(wT/midIn)*midIn;y<=wB;y+=midIn){
+      if(mult(y,majIn)) continue;
+      const py=scy(y); if(py>18&&py<H-5) ctx.fillText((((Math.round(y)%12)+12)%12)+'"', 2, py-2);
+    }
+  }
+
+  // Foot labels on the major tier.
   if(majIn*z>=34){
     ctx.fillStyle=p.gTxt; ctx.font='9px monospace';
-    for(let x=Math.floor(wL/majIn)*majIn;x<=wR;x+=majIn){
+    for(let x=Math.ceil(wL/majIn)*majIn;x<=wR;x+=majIn){
       const px=scx(x); if(px>15&&px<W-5) ctx.fillText(Math.round(x/12)+"'",px+2,11);
     }
-    for(let y=Math.floor(wT/majIn)*majIn;y<=wB;y+=majIn){
+    for(let y=Math.ceil(wT/majIn)*majIn;y<=wB;y+=majIn){
       const py=scy(y); if(py>12&&py<H-5) ctx.fillText(Math.round(y/12)+"'",2,py-2);
     }
   }
@@ -1690,9 +1730,24 @@ document.getElementById('ppedit').addEventListener('click',()=>{
 // LAYERS PANEL
 // ═══════════════════════════════════════════════════════════════
 const lpNode=()=>document.getElementById('lp');
-function openLP(){ renderLayerList(); lpNode().classList.add('open'); }   // independent of #pp
-function closeLP(){ lpNode().classList.remove('open'); }
+function openLP(){ renderLayerList(); lpNode().classList.add('open'); persistState(); }   // independent of #pp
+function closeLP(){ lpNode().classList.remove('open'); persistState(); }
 function lpOpen(){ return lpNode().classList.contains('open'); }
+
+// Layers toolbar: collapse/expand all, hide/show all.
+document.querySelector('.lptools').addEventListener('click', e=>{
+  const b=e.target.closest('[data-lact]'); if(!b) return;
+  ensureLayers();
+  switch(b.dataset.lact){
+    case 'collapseAll': S.layers.forEach(l=>l.collapsed=true);  renderLayerList(); persistState(); break;
+    case 'expandAll':   S.layers.forEach(l=>l.collapsed=false); renderLayerList(); persistState(); break;
+    case 'hideAll':
+      pushUndo(); S.layers.forEach(l=>l.visible=false); saveL(); render(); renderLayerList(); break;
+    case 'showAll':
+      pushUndo(); S.layers.forEach(l=>l.visible=true); S.els.forEach(el=>{ if(el.hidden) el.hidden=false; });
+      saveL(); render(); renderLayerList(); break;
+  }
+});
 
 const TICON={wall:'▬',door:'🚪',window:'🪟',beam:'▮',outlet:'⚡',conduit:'〰',
              light:'💡',text:'🆃',rect:'▭',circ:'◯'};
@@ -1767,10 +1822,10 @@ document.getElementById('lplist').addEventListener('click', e=>{
   const idx=S.layers.findIndex(l=>l.id===lid); if(idx<0) return;
   const l=S.layers[idx];
   switch(btn.dataset.act){
-    case 'collapse': l.collapsed=!l.collapsed; renderLayerList(); break;
+    case 'collapse': l.collapsed=!l.collapsed; renderLayerList(); persistState(); break;
     case 'vis':  l.visible=!(l.visible!==false); saveL(); render(); renderLayerList(); break;
     case 'lock': pushUndo(); l.locked=!l.locked; saveL(); render(); renderLayerList(); break;
-    case 'active': UI.activeLayer=lid; markActiveRow(); break;
+    case 'active': UI.activeLayer=lid; markActiveRow(); persistState(); break;
     case 'del': {
       if(S.layers.length<=1) break;
       const cnt=S.els.filter(el=>el.layer===lid).length;
@@ -2523,6 +2578,7 @@ document.getElementById('wt-input').addEventListener('input', e=>{
 loadL();
 resize();
 setTool(T.SEL);
+if(UI._restoreLPOpen) openLP();   // restore the layers panel if it was open last session
 
 // Update hint on load
 document.getElementById('hint').textContent = HINTS[T.SEL];
