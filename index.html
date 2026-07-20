@@ -95,8 +95,8 @@ canvas { display:block; width:100%; height:100%; touch-action:none; }
 .tbtn:hover { background:rgba(79,195,247,.15); color:var(--main); }
 .tbtn.on { background:var(--accent); border-color:var(--accent); color:#fff; box-shadow:0 0 8px rgba(233,69,96,.5); }
 
-/* ── Properties panel (slide up) ── */
-#pp, #lp {
+/* ── Properties panel (slide up from bottom) ── */
+#pp {
   position:fixed; bottom:0; left:0; right:0;
   background:var(--panel); border-top:2px solid var(--accent);
   padding:8px 12px 12px; transform:translateY(100%);
@@ -104,24 +104,52 @@ canvas { display:block; width:100%; height:100%; touch-action:none; }
   z-index:100; max-height:58vh; overflow-y:auto;
   -webkit-overflow-scrolling:touch;
 }
-#pp.open, #lp.open { transform:translateY(0); }
+#pp.open { transform:translateY(0); }
 
-/* ── Layers ── */
-.lrow { display:flex; align-items:center; gap:6px; padding:5px 6px; margin-bottom:5px;
-        border:1px solid var(--border); border-radius:6px; background:rgba(255,255,255,.04); }
-.lrow.active { border-color:var(--blue); background:rgba(79,195,247,.14); }
-.lrow.hidden .lname { opacity:.4; text-decoration:line-through; }
+/* ── Layers panel (slide in from right, independent of #pp) ── */
+#lp {
+  position:fixed; top:0; right:0; bottom:0; width:284px; max-width:86vw;
+  background:var(--panel); border-left:2px solid var(--accent);
+  padding:10px 12px 14px; transform:translateX(100%);
+  transition:transform .3s cubic-bezier(.4,0,.2,1);
+  z-index:120; overflow-y:auto; -webkit-overflow-scrolling:touch;
+}
+#lp.open { transform:translateX(0); }
+
+/* ── Layers tree (Photoshop-style) ── */
+.lgroup { display:flex; align-items:center; gap:3px; padding:4px; margin-top:5px; position:relative;
+          border:1px solid var(--border); border-radius:6px; background:rgba(255,255,255,.05); }
+.lgroup.active { border-color:var(--blue); background:rgba(79,195,247,.16); }
+.lgroup.ghidden .lname { opacity:.4; text-decoration:line-through; }
+.lgroup.glocked { background:rgba(201,146,46,.13); }
+.lgroup.dragging { opacity:.45; }
+.lgroup.drop-before::before, .lgroup.drop-after::after {
+  content:''; position:absolute; left:2px; right:2px; height:2px; background:var(--blue); border-radius:2px; z-index:2; }
+.lgroup.drop-before::before { top:-4px; }
+.lgroup.drop-after::after  { bottom:-4px; }
+.ldrag { cursor:grab; color:var(--muted); font-size:14px; padding:0 1px; flex-shrink:0;
+         touch-action:none; user-select:none; }
 .lname { flex:1; font-size:12px; color:var(--main); cursor:pointer; white-space:nowrap;
-         overflow:hidden; text-overflow:ellipsis; }
-.lname-edit { flex:1; min-width:0; height:26px; min-height:0; padding:2px 6px; font-size:12px; }
-.lcount { font-size:10px; color:var(--muted); flex-shrink:0; }
+         overflow:hidden; text-overflow:ellipsis; min-width:0; }
+.lname-edit { flex:1; min-width:0; height:24px; min-height:0; padding:2px 6px; font-size:12px; }
+.lcount { font-size:10px; color:var(--muted); flex-shrink:0; min-width:12px; text-align:center; }
+.lactive-tag { font-size:8px; color:var(--blue); flex-shrink:0; }
 .lbtn { background:rgba(255,255,255,.07); border:1px solid var(--border); color:var(--main);
-        border-radius:4px; min-width:28px; height:28px; font-size:13px; cursor:pointer;
-        display:flex; align-items:center; justify-content:center; flex-shrink:0; padding:0 4px; }
+        border-radius:4px; min-width:26px; height:26px; font-size:12px; cursor:pointer;
+        display:flex; align-items:center; justify-content:center; flex-shrink:0; padding:0 3px; }
+.lbtn.xs { min-width:22px; height:22px; font-size:11px; }
 .lbtn:hover { background:rgba(79,195,247,.2); }
 .lbtn:disabled { opacity:.3; cursor:default; }
 .lbtn.del { color:#ff8b7b; }
-.lactive-tag { font-size:9px; color:var(--blue); flex-shrink:0; }
+.lbtn.on { background:rgba(201,146,46,.32); border-color:#c9922e; }
+/* object rows inside a group */
+.lobj { display:flex; align-items:center; gap:5px; padding:2px 4px 2px 22px; margin-top:2px;
+        border-radius:5px; background:rgba(255,255,255,.02); }
+.lobj.sel { background:rgba(79,195,247,.18); }
+.lobj.ohidden .oname { opacity:.4; text-decoration:line-through; }
+.oicon { font-size:12px; width:16px; text-align:center; flex-shrink:0; color:var(--blue); }
+.oname { flex:1; font-size:11px; color:var(--main); cursor:pointer; white-space:nowrap;
+         overflow:hidden; text-overflow:ellipsis; min-width:0; }
 .pph { display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; }
 .pptitle { font-size:13px; font-weight:600; color:var(--blue); }
 .ppc { background:none; border:none; color:var(--muted); font-size:20px; cursor:pointer; padding:0 4px; line-height:1; }
@@ -248,7 +276,7 @@ canvas { display:block; width:100%; height:100%; touch-action:none; }
     <button class="ppc" id="lpclose">✕</button>
   </div>
   <div style="font-size:10px;color:var(--muted);margin-bottom:8px">
-    New objects go on the active layer · tap a name to make it active · double-tap to rename · hide a layer to skip it when selecting
+    Tap a name = active layer · double-tap = rename · drag ⠿ to reorder · 👁 hide · 🔒 lock (group or object)
   </div>
   <div id="lplist"></div>
   <div class="pbr">
@@ -429,6 +457,12 @@ function fmtIn(inches) {
 // ═══════════════════════════════════════════════════════════════
 function saveL(){
   try{ localStorage.setItem(SKEY, JSON.stringify({S,VP})); }catch(_){}
+  lpRefresh();   // keep the layers panel in sync with canvas edits
+}
+// Rebuild the layers tree if it's open (but never while a name is being edited).
+function lpRefresh(){
+  const lp=document.getElementById('lp');
+  if(lp && lp.classList.contains('open') && !document.querySelector('#lplist .lname-edit')) renderLayerList();
 }
 function loadL(){
   try{
@@ -491,6 +525,9 @@ function ensureLayers(){
 
 function getLayer(id){ return S.layers && S.layers.find(l=>l.id===id) || null; }
 function layerVisible(id){ const l=getLayer(id); return !l || l.visible!==false; }
+function layerLocked(id){ const l=getLayer(id); return !!(l && l.locked); }
+// Effective lock: object is immovable if it OR its group is locked.
+function elLocked(el){ return !!(el && (el.locked || layerLocked(el.layer))); }
 
 // Elements in draw order (bottom→top), honouring layer order and
 // skipping hidden layers. Falls back to raw element order if layers
@@ -500,7 +537,7 @@ function drawOrder(){
   const out=[];
   for(const lay of S.layers){
     if(lay.visible===false) continue;
-    for(const el of S.els){ if(el.layer===lay.id) out.push(el); }
+    for(const el of S.els){ if(el.layer===lay.id && !el.hidden) out.push(el); }
   }
   return out;
 }
@@ -860,7 +897,7 @@ function drawEl(el, p, sel, hov){
     }
   }
   // Rotation handle (selected, unlocked, rotatable types)
-  if(sel && !el.locked){
+  if(sel && !elLocked(el)){
     const hs=handleScreen(el);
     if(hs){
       ctx.setLineDash([]); ctx.lineWidth=1.5; ctx.strokeStyle=p.sel;
@@ -1429,7 +1466,7 @@ function selDown(cwx2,cwy2){
   // Rotation handle of the already-selected element takes priority over hit-testing.
   if(UI.selId){
     const se=getEl(UI.selId);
-    if(se && !se.locked){
+    if(se && !elLocked(se)){
       const hs=handleScreen(se);
       if(hs && Math.hypot(ptr.sx0-hs.hx, ptr.sy0-hs.hy)<=20){
         UI.rot={id:se.id, px:hs.px, py:hs.py, base:hs.base, snap:snapSt()};
@@ -1439,13 +1476,13 @@ function selDown(cwx2,cwy2){
     }
   }
   const el=hitTest(cwx2,cwy2);
-  if(el && !el.locked){
+  if(el && !elLocked(el)){
     UI.selId=el.id; UI.dragEl=el; UI.dragging=false;
     UI.dragSnap=snapSt();
     const an=anchorW(el);
     UI.dragOffW={x:cwx2-an.x, y:cwy2-an.y};
     showPP(el); render();
-  } else if(el && el.locked){
+  } else if(el && elLocked(el)){
     // Locked: select & show properties (to unlock), but never move — drag pans.
     UI.selId=el.id; UI.dragEl=null;
     UI.vpDrag={x:VP.x,y:VP.y,sx:ptr.sx0,sy:ptr.sy0};
@@ -1497,7 +1534,6 @@ function selUp(cwx2,cwy2,moved){
 // PROPERTIES PANEL
 // ═══════════════════════════════════════════════════════════════
 function showPP(el){
-  closeLP();
   document.getElementById('pptitle').textContent = TLBL[el.type]||el.type;
   document.getElementById('ppfields').innerHTML  = buildPPF(el);
   document.getElementById('pp').classList.add('open');
@@ -1540,9 +1576,10 @@ function showPP(el){
   // "Auto" color reset
   const rst=document.querySelector('#ppfields [data-clr-reset]');
   if(rst) rst.addEventListener('click',()=>{ pushOnce(); setEl(el.id,{color:null}); const e2=getEl(el.id); if(e2) showPP(e2); });
+  lpRefresh();   // reflect the newly-selected object in the layers tree
 }
 
-function closePP(){ document.getElementById('pp').classList.remove('open'); }
+function closePP(){ document.getElementById('pp').classList.remove('open'); lpRefresh(); }
 
 function buildPPF(el){
   const row=(l,h)=>`<div class="pr"><span class="pl">${l}</span>${h}</div>`;   // full-width row
@@ -1649,56 +1686,86 @@ document.getElementById('ppedit').addEventListener('click',()=>{
 // LAYERS PANEL
 // ═══════════════════════════════════════════════════════════════
 const lpNode=()=>document.getElementById('lp');
-function openLP(){ closePP(); renderLayerList(); lpNode().classList.add('open'); }
+function openLP(){ renderLayerList(); lpNode().classList.add('open'); }   // independent of #pp
 function closeLP(){ lpNode().classList.remove('open'); }
 function lpOpen(){ return lpNode().classList.contains('open'); }
 
+const TICON={wall:'▬',door:'🚪',window:'🪟',beam:'▮',outlet:'⚡',conduit:'〰',
+             light:'💡',text:'🆃',rect:'▭',circ:'◯'};
+function objName(el){
+  if(el.lbl) return el.lbl;
+  if(el.type==='text') return el.txt||'Text';
+  return (TLBL[el.type]||el.type);
+}
+
+// Photoshop-style tree: groups (top-most first) each containing their objects.
 function renderLayerList(){
   ensureLayers();
-  const counts={};
-  for(const el of S.els) counts[el.layer]=(counts[el.layer]||0)+1;
+  const byLayer={};
+  for(const el of S.els){ (byLayer[el.layer]||(byLayer[el.layer]=[])).push(el); }
   let h='';
-  // Show top layer first (reverse of draw order).
   for(let i=S.layers.length-1;i>=0;i--){
     const l=S.layers[i];
     const active=l.id===UI.activeLayer;
-    const vis=l.visible!==false;
-    h+=`<div class="lrow${active?' active':''}${vis?'':' hidden'}" data-lid="${l.id}">`;
-    h+=`<button class="lbtn" data-act="vis" title="Show / hide">${vis?'👁':'🚫'}</button>`;
-    h+=`<span class="lname" data-act="active" title="Make active">${esc(l.name)}</span>`;
-    h+=`<span class="lcount">${counts[l.id]||0}</span>`;
+    const vis=l.visible!==false, lk=!!l.locked, col=!!l.collapsed;
+    const els=byLayer[l.id]||[];
+    h+=`<div class="lgroup${active?' active':''}${vis?'':' ghidden'}${lk?' glocked':''}" data-lid="${l.id}">`;
+    h+=`<span class="ldrag" title="Drag to reorder">⠿</span>`;
+    h+=`<button class="lbtn xs" data-act="collapse" title="Collapse / expand">${col?'▸':'▾'}</button>`;
+    h+=`<button class="lbtn" data-act="vis" title="Show / hide group">${vis?'👁':'🚫'}</button>`;
+    h+=`<button class="lbtn${lk?' on':''}" data-act="lock" title="Lock / unlock group">${lk?'🔒':'🔓'}</button>`;
+    h+=`<span class="lname" data-act="active" title="Tap = active · double-tap = rename">${esc(l.name)}</span>`;
+    h+=`<span class="lcount">${els.length}</span>`;
     if(active) h+=`<span class="lactive-tag">active</span>`;
-    h+=`<button class="lbtn" data-act="up" title="Move up"${i===S.layers.length-1?' disabled':''}>▲</button>`;
-    h+=`<button class="lbtn" data-act="dn" title="Move down"${i===0?' disabled':''}>▼</button>`;
-    h+=`<button class="lbtn" data-act="ren" title="Rename">✏</button>`;
-    h+=`<button class="lbtn del" data-act="del" title="Delete"${S.layers.length<=1?' disabled':''}>🗑</button>`;
+    h+=`<button class="lbtn del" data-act="del" title="Delete group"${S.layers.length<=1?' disabled':''}>🗑</button>`;
     h+=`</div>`;
+    if(!col){
+      // top-most object first (reverse of draw order within the layer)
+      for(let j=els.length-1;j>=0;j--){
+        const el=els[j];
+        const oh=!!el.hidden, ol=!!el.locked, osel=el.id===UI.selId;
+        h+=`<div class="lobj${osel?' sel':''}${oh?' ohidden':''}" data-oid="${el.id}">`;
+        h+=`<span class="oicon">${TICON[el.type]||'•'}</span>`;
+        h+=`<span class="oname" data-oact="osel">${esc(objName(el))}</span>`;
+        h+=`<button class="lbtn xs" data-oact="ovis" title="Show / hide">${oh?'🚫':'👁'}</button>`;
+        h+=`<button class="lbtn xs${ol?' on':''}" data-oact="olock" title="Lock / unlock">${ol?'🔒':'🔓'}</button>`;
+        h+=`</div>`;
+      }
+    }
   }
   document.getElementById('lplist').innerHTML=h;
 }
 
 document.getElementById('lplist').addEventListener('click', e=>{
+  // Object-row controls
+  const obtn=e.target.closest('[data-oact]');
+  if(obtn){
+    const oid=e.target.closest('.lobj').dataset.oid;
+    const el=getEl(oid); if(!el) return;
+    switch(obtn.dataset.oact){
+      case 'osel':
+        UI.selId=oid; UI.tool=T.SEL;
+        document.querySelectorAll('.tbtn').forEach(b=>b.classList.toggle('on',b.dataset.tool===T.SEL));
+        showPP(el); render(); renderLayerList(); break;
+      case 'ovis':
+        pushUndo(); el.hidden=!el.hidden; saveL(); render(); renderLayerList(); break;
+      case 'olock':
+        pushUndo(); el.locked=!el.locked; saveL(); render(); renderLayerList();
+        if(UI.selId===oid) updateLockBtn(getEl(oid)); break;
+    }
+    return;
+  }
+  // Group controls
   const btn=e.target.closest('[data-act]'); if(!btn) return;
-  const rowEl=e.target.closest('.lrow'); if(!rowEl) return;
-  const lid=rowEl.dataset.lid;
+  const grp=e.target.closest('.lgroup'); if(!grp) return;
+  const lid=grp.dataset.lid;
   const idx=S.layers.findIndex(l=>l.id===lid); if(idx<0) return;
   const l=S.layers[idx];
   switch(btn.dataset.act){
-    case 'vis':
-      l.visible = !(l.visible!==false);
-      saveL(); render(); renderLayerList(); break;
-    case 'active':
-      UI.activeLayer=lid; markActiveRow();   // minimal update (keeps nodes for dbl-click)
-      break;
-    case 'up':
-      if(idx<S.layers.length-1){ pushUndo(); S.layers.splice(idx,1); S.layers.splice(idx+1,0,l); saveL(); render(); renderLayerList(); }
-      break;
-    case 'dn':
-      if(idx>0){ pushUndo(); S.layers.splice(idx,1); S.layers.splice(idx-1,0,l); saveL(); render(); renderLayerList(); }
-      break;
-    case 'ren':
-      beginRename(lid);
-      break;
+    case 'collapse': l.collapsed=!l.collapsed; renderLayerList(); break;
+    case 'vis':  l.visible=!(l.visible!==false); saveL(); render(); renderLayerList(); break;
+    case 'lock': pushUndo(); l.locked=!l.locked; saveL(); render(); renderLayerList(); break;
+    case 'active': UI.activeLayer=lid; markActiveRow(); break;
     case 'del': {
       if(S.layers.length<=1) break;
       const cnt=S.els.filter(el=>el.layer===lid).length;
@@ -1714,10 +1781,10 @@ document.getElementById('lplist').addEventListener('click', e=>{
   }
 });
 
-// Update only the active-row highlight (no innerHTML rebuild, so the name
+// Update only the active-group highlight (no innerHTML rebuild, so name
 // nodes survive for reliable double-click-to-rename).
 function markActiveRow(){
-  document.querySelectorAll('#lplist .lrow').forEach(r=>{
+  document.querySelectorAll('#lplist .lgroup').forEach(r=>{
     const on=r.dataset.lid===UI.activeLayer;
     r.classList.toggle('active',on);
     let tag=r.querySelector('.lactive-tag');
@@ -1727,12 +1794,12 @@ function markActiveRow(){
   });
 }
 
-// In-place layer rename — stays inside the Layers panel, no browser prompt.
+// In-place layer rename — stays inside the panel, no browser prompt.
 function beginRename(lid){
   const l=getLayer(lid); if(!l) return;
-  const row=document.querySelector(`#lplist .lrow[data-lid="${lid}"]`); if(!row) return;
+  const row=document.querySelector(`#lplist .lgroup[data-lid="${lid}"]`); if(!row) return;
   const nameEl=row.querySelector('.lname');
-  if(!nameEl || row.querySelector('.lname-edit')) return;   // already editing
+  if(!nameEl || row.querySelector('.lname-edit')) return;
   const inp=document.createElement('input');
   inp.className='pi lname-edit'; inp.type='text'; inp.value=l.name;
   inp.setAttribute('autocomplete','off'); inp.setAttribute('spellcheck','false');
@@ -1755,12 +1822,56 @@ function beginRename(lid){
   inp.addEventListener('blur',()=>commit(true));
 }
 
-// Double-click a layer name to rename it in place.
 document.getElementById('lplist').addEventListener('dblclick', e=>{
   const nameEl=e.target.closest('.lname'); if(!nameEl) return;
-  const row=e.target.closest('.lrow'); if(!row) return;
+  const row=e.target.closest('.lgroup'); if(!row) return;
   e.preventDefault();
   beginRename(row.dataset.lid);
+});
+
+// ── Drag-to-reorder groups (pointer-based, works with touch) ──
+let lpDrag=null;
+function positionDrop(y){
+  const groups=[...document.querySelectorAll('#lplist .lgroup')];
+  groups.forEach(g=>g.classList.remove('drop-before','drop-after'));
+  let beforeLid=null;
+  for(const g of groups){
+    if(g.dataset.lid===lpDrag.lid) continue;
+    const r=g.getBoundingClientRect();
+    if(y < r.top + r.height/2){ beforeLid=g.dataset.lid; break; }
+  }
+  lpDrag.beforeLid=beforeLid;
+  if(beforeLid){ document.querySelector(`#lplist .lgroup[data-lid="${beforeLid}"]`).classList.add('drop-before'); }
+  else { const others=groups.filter(g=>g.dataset.lid!==lpDrag.lid); if(others.length) others[others.length-1].classList.add('drop-after'); }
+}
+function finishDrag(){
+  const grp=document.querySelector(`#lplist .lgroup[data-lid="${lpDrag.lid}"]`);
+  if(grp) grp.classList.remove('dragging');
+  let disp=[...document.querySelectorAll('#lplist .lgroup')].map(x=>x.dataset.lid).filter(id=>id!==lpDrag.lid);
+  const at = lpDrag.beforeLid ? disp.indexOf(lpDrag.beforeLid) : disp.length;
+  disp.splice(at,0,lpDrag.lid);
+  const newOrder=disp.slice().reverse().map(id=>getLayer(id)).filter(Boolean);   // display top-first → array bottom-first
+  const changed = newOrder.length===S.layers.length && newOrder.map(l=>l.id).join(',')!==S.layers.map(l=>l.id).join(',');
+  if(changed){ pushUndo(); S.layers=newOrder; saveL(); render(); }
+  lpDrag=null; renderLayerList();
+}
+document.getElementById('lplist').addEventListener('pointerdown', e=>{
+  const handle=e.target.closest('.ldrag'); if(!handle) return;
+  const grp=handle.closest('.lgroup'); if(!grp) return;
+  e.preventDefault();
+  lpDrag={lid:grp.dataset.lid, beforeLid:null};
+  grp.classList.add('dragging');
+  try{ handle.setPointerCapture(e.pointerId); }catch(_){}
+  const move=ev=>{ if(lpDrag) positionDrop(ev.clientY); };
+  const up=()=>{
+    handle.removeEventListener('pointermove',move);
+    handle.removeEventListener('pointerup',up);
+    handle.removeEventListener('pointercancel',up);
+    if(lpDrag) finishDrag();
+  };
+  handle.addEventListener('pointermove',move);
+  handle.addEventListener('pointerup',up);
+  handle.addEventListener('pointercancel',up);
 });
 
 document.getElementById('lpadd').addEventListener('click',()=>{
