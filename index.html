@@ -99,7 +99,7 @@ canvas { display:block; width:100%; height:100%; touch-action:none; }
 #pp, #lp {
   position:fixed; bottom:0; left:0; right:0;
   background:var(--panel); border-top:2px solid var(--accent);
-  padding:10px 14px 14px; transform:translateY(100%);
+  padding:8px 12px 12px; transform:translateY(100%);
   transition:transform .3s cubic-bezier(.4,0,.2,1);
   z-index:100; max-height:58vh; overflow-y:auto;
   -webkit-overflow-scrolling:touch;
@@ -125,14 +125,17 @@ canvas { display:block; width:100%; height:100%; touch-action:none; }
 .pptitle { font-size:13px; font-weight:600; color:var(--blue); }
 .ppc { background:none; border:none; color:var(--muted); font-size:20px; cursor:pointer; padding:0 4px; line-height:1; }
 .ppc:hover { color:#fff; }
-.pr { display:flex; align-items:center; gap:8px; margin-bottom:7px; }
-.pl { font-size:11px; color:var(--muted); min-width:88px; flex-shrink:0; }
+.pr { display:flex; align-items:center; gap:8px; margin-bottom:5px; }
+.pl { font-size:10px; color:var(--muted); min-width:52px; flex-shrink:0; }
 .pi {
-  flex:1; background:rgba(255,255,255,.07); border:1px solid var(--border);
-  color:#fff; border-radius:5px; padding:5px 8px; font-size:12px; min-height:30px;
+  flex:1; min-width:0; background:rgba(255,255,255,.07); border:1px solid var(--border);
+  color:#fff; border-radius:5px; padding:3px 7px; font-size:12px; min-height:27px;
 }
 .pi:focus { outline:none; border-color:var(--blue); }
-.pck { width:20px; height:20px; cursor:pointer; }
+.pck { width:18px; height:18px; cursor:pointer; flex-shrink:0; }
+/* compact half-width field cell: label sits snug next to its input */
+.fld { flex:1; display:flex; align-items:center; gap:5px; min-width:0; }
+.fld > .pl { min-width:auto; }
 .pbr { display:flex; gap:7px; margin-top:10px; }
 .pb { flex:1; padding:7px; border-radius:5px; border:none; font-size:12px; cursor:pointer; min-height:34px; }
 .pbdel { background:#b03028; color:#fff; }
@@ -318,7 +321,7 @@ let UI = {
   shift:false,
   grid:true, bp:true, // blueprint dark mode
   dragEl:null, dragging:false, dragOffW:null, dragSnap:null,
-  vpDrag:null,
+  vpDrag:null, rot:null,   // rot = in-progress rotation-handle drag
   defWallT: DWALT,
   activeLayer: null,   // id of layer new elements are added to
 };
@@ -560,6 +563,32 @@ function rotPt(px,py,cx,cy,deg){
   const dx=px-cx, dy=py-cy;
   return {x:cx+dx*c-dy*s, y:cy+dx*s+dy*c};
 }
+// Describes the rotation handle for a rotatable element, or null.
+// pivot = world point rotation happens about; base = handle's world angle
+// (deg) when rot=0; reach() = handle distance from pivot in SCREEN px.
+// All rotatable types store their angle in `rot`.
+function rotInfo(el){
+  switch(el.type){
+    case 'rect': case 'beam': case 'light': {
+      const c=rectCenter(el);
+      return { pivot:c, base:-90, reach:()=>scl((el.h||0)/2)+26 };
+    }
+    case 'door':
+      return { pivot:{x:el.x,y:el.y}, base:0, reach:()=>Math.max(scl(el.width||30),24) };
+    case 'outlet':
+      return { pivot:{x:el.x,y:el.y}, base:-90, reach:()=>Math.max(9,VP.z*1.5)+22 };
+    case 'text':
+      return { pivot:{x:el.x,y:el.y}, base:-90, reach:()=>28 };
+    default: return null;
+  }
+}
+function handleScreen(el){
+  const ri=rotInfo(el); if(!ri) return null;
+  const px=scx(ri.pivot.x), py=scy(ri.pivot.y);
+  const ang=(ri.base+(el.rot||0))*Math.PI/180, r=ri.reach();
+  return { px, py, hx:px+Math.cos(ang)*r, hy:py+Math.sin(ang)*r, base:ri.base };
+}
+
 // Axis-aligned bounds of a possibly-rotated box.
 function boxBounds(el){
   const w=el.w||0, h=el.h||0, rot=el.rot||0;
@@ -827,6 +856,18 @@ function drawEl(el, p, sel, hov){
       ctx.globalAlpha=sel?1:0.7;
       ctx.fillText('🔒', scx(b.x2)+3, scy(b.y1)+2);
       ctx.globalAlpha=1;
+    }
+  }
+  // Rotation handle (selected, unlocked, rotatable types)
+  if(sel && !el.locked){
+    const hs=handleScreen(el);
+    if(hs){
+      ctx.setLineDash([]); ctx.lineWidth=1.5; ctx.strokeStyle=p.sel;
+      ctx.beginPath(); ctx.moveTo(hs.px,hs.py); ctx.lineTo(hs.hx,hs.hy); ctx.stroke();
+      ctx.fillStyle=UI.bp?'#0d1b2a':'#fff';
+      ctx.beginPath(); ctx.arc(hs.hx,hs.hy,6,0,Math.PI*2); ctx.fill(); ctx.stroke();
+      ctx.fillStyle=p.sel;
+      ctx.beginPath(); ctx.arc(hs.hx,hs.hy,2,0,Math.PI*2); ctx.fill();
     }
   }
   ctx.restore();
@@ -1384,6 +1425,18 @@ function finishCond(){
 
 // ── Select tool ──
 function selDown(cwx2,cwy2){
+  // Rotation handle of the already-selected element takes priority over hit-testing.
+  if(UI.selId){
+    const se=getEl(UI.selId);
+    if(se && !se.locked){
+      const hs=handleScreen(se);
+      if(hs && Math.hypot(ptr.sx0-hs.hx, ptr.sy0-hs.hy)<=20){
+        UI.rot={id:se.id, px:hs.px, py:hs.py, base:hs.base, snap:snapSt()};
+        UI.dragEl=null; UI.vpDrag=null;
+        return;
+      }
+    }
+  }
   const el=hitTest(cwx2,cwy2);
   if(el && !el.locked){
     UI.selId=el.id; UI.dragEl=el; UI.dragging=false;
@@ -1404,6 +1457,14 @@ function selDown(cwx2,cwy2){
 }
 
 function selDrag(cwx2,cwy2,dx,dy){
+  if(UI.rot){
+    const el=getEl(UI.rot.id); if(!el){ UI.rot=null; return; }
+    let deg=Math.atan2(ptr.syL-UI.rot.py, ptr.sxL-UI.rot.px)*180/Math.PI - UI.rot.base;
+    deg = UI.shift ? Math.round(deg/15)*15 : Math.round(deg);   // Shift = 15° steps
+    el.rot=((deg%360)+360)%360;
+    reqRender();
+    return;
+  }
   if(UI.dragEl){
     UI.dragging=true;
     const an=anchorW(UI.dragEl);
@@ -1418,6 +1479,12 @@ function selDrag(cwx2,cwy2,dx,dy){
 }
 
 function selUp(cwx2,cwy2,moved){
+  if(UI.rot){
+    if(UI.rot.snap){ undos.push(UI.rot.snap); if(undos.length>MXUNDO) undos.shift(); redos=[]; }
+    const s=UI.selId; UI.rot=null; saveL();
+    const e2=s?getEl(s):null; if(e2) showPP(e2);   // refresh Rot° field in panel
+    return;
+  }
   if(UI.dragEl&&UI.dragging&&UI.dragSnap){
     undos.push(UI.dragSnap); redos=[]; saveL();
   }
@@ -1477,60 +1544,53 @@ function showPP(el){
 function closePP(){ document.getElementById('pp').classList.remove('open'); }
 
 function buildPPF(el){
-  const row=(l,h)=>`<div class="pr"><span class="pl">${l}</span>${h}</div>`;
+  const row=(l,h)=>`<div class="pr"><span class="pl">${l}</span>${h}</div>`;   // full-width row
+  const cell=(l,h)=>`<div class="fld"><span class="pl">${l}</span>${h}</div>`; // half-width cell
+  const row2=(a,b)=>`<div class="pr">${a}${b||''}</div>`;                       // one/two cells
   const ti=(p,v,ph='')=>`<input class="pi" type="text" data-p="${p}" value="${esc(v||'')}" placeholder="${ph}">`;
   // Dimension input: shows feet-inches, accepts 32', 12'-6", 6", 12x32, 384 …
   const di=(p,v)=>`<input class="pi" type="text" autocapitalize="off" autocorrect="off" data-p="${p}" data-dim value="${fmtIn(v||0)}">`;
   const ni=(p,v,mn,mx,st=0.25)=>`<input class="pi" type="number" data-p="${p}" value="${v??0}" min="${mn}" max="${mx}" step="${st}">`;
   const ci=(p,v)=>`<input class="pck" type="checkbox" data-p="${p}" ${v?'checked':''}>`;
   const defColor=UI.bp?'#9ad4f5':'#111111';
-  const clr=()=>`<input class="pck" style="width:38px;height:26px;padding:0;border:none;background:none" type="color" data-p="color" value="${el.color||defColor}"><button type="button" data-clr-reset style="margin-left:8px;padding:4px 9px;font-size:11px;border-radius:5px;border:1px solid var(--border);background:rgba(255,255,255,.08);color:var(--main);cursor:pointer">Auto</button>`;
+  const clr=()=>`<input class="pck" style="width:30px;height:24px;padding:0;border:none;background:none" type="color" data-p="color" value="${el.color||defColor}"><button type="button" data-clr-reset style="margin-left:6px;padding:3px 7px;font-size:10px;border-radius:5px;border:1px solid var(--border);background:rgba(255,255,255,.08);color:var(--main);cursor:pointer">Auto</button>`;
+  const sel=`<select class="pi" data-p="layer">${(S.layers||[]).map(l=>`<option value="${l.id}"${el.layer===l.id?' selected':''}>${esc(l.name)}</option>`).join('')}</select>`;
   let h='';
   h+=row('Label', ti('lbl',el.lbl,'Optional label'));
-  h+=row('Lock', ci('locked',el.locked));
-  h+=row('Layer', `<select class="pi" data-p="layer">${(S.layers||[]).map(l=>`<option value="${l.id}"${el.layer===l.id?' selected':''}>${esc(l.name)}</option>`).join('')}</select>`);
-  // Position fields
+  h+=row2(cell('Lock', ci('locked',el.locked)), cell('Layer', sel));
+  // Position fields — paired X/Y per row
   if(el.type==='wall'||el.type==='window'){
-    h+=row('Start X', di('x1',el.x1));
-    h+=row('Start Y', di('y1',el.y1));
-    h+=row('End X',   di('x2',el.x2));
-    h+=row('End Y',   di('y2',el.y2));
+    h+=row2(cell('X1', di('x1',el.x1)), cell('Y1', di('y1',el.y1)));
+    h+=row2(cell('X2', di('x2',el.x2)), cell('Y2', di('y2',el.y2)));
   } else if(el.type!=='conduit'){
-    h+=row('X', di('x',el.x));
-    h+=row('Y', di('y',el.y));
+    h+=row2(cell('X', di('x',el.x)), cell('Y', di('y',el.y)));
   }
   switch(el.type){
     case 'wall':
-      h+=row('Length', di('len',Math.hypot((el.x2-el.x1),(el.y2-el.y1))));
-      h+=row('Thickness', di('t',el.t??DWALT));
-      h+=row('Side°',  ni('angle',el.angle??0,-360,360,15));
-      h+=row('Color',  clr());
+      h+=row2(cell('Len', di('len',Math.hypot((el.x2-el.x1),(el.y2-el.y1)))), cell('Thick', di('t',el.t??DWALT)));
+      h+=row2(cell('Side°', ni('angle',el.angle??0,-360,360,15)), cell('Color', clr()));
       break;
     case 'door':
-      h+=row('Width',     di('width',el.width??30));
-      h+=row('Rotation°', ni('rot',el.rot??0,-360,360,15));
-      h+=row('Flip swing',ci('flip',el.flip)); break;
+      h+=row2(cell('Width', di('width',el.width??30)), cell('Rot°', ni('rot',el.rot??0,-360,360,15)));
+      h+=row2(cell('Flip', ci('flip',el.flip)), '');
+      break;
     case 'beam': case 'light':
-      h+=row('Width',  di('w',el.w??12));
-      h+=row('Height', di('h',el.h??12));
-      h+=row('Rotation°', ni('rot',el.rot??0,-360,360,15));
-      if(el.type==='light') h+=row('Tubes', ni('tubes',el.tubes??2,1,8,1));
+      h+=row2(cell('Width', di('w',el.w??12)), cell('Height', di('h',el.h??12)));
+      h+=row2(cell('Rot°', ni('rot',el.rot??0,-360,360,15)), el.type==='light'?cell('Tubes', ni('tubes',el.tubes??2,1,8,1)):'');
       break;
     case 'rect':
-      h+=row('Width',  di('w',el.w??24));
-      h+=row('Height', di('h',el.h??24));
-      h+=row('Rotation°', ni('rot',el.rot??0,-360,360,15));
-      h+=row('Color',  clr());
+      h+=row2(cell('Width', di('w',el.w??24)), cell('Height', di('h',el.h??24)));
+      h+=row2(cell('Rot°', ni('rot',el.rot??0,-360,360,15)), cell('Color', clr()));
       break;
     case 'circ':
-      h+=row('Radius', di('r',el.r??12));
-      h+=row('Color',  clr());
+      h+=row2(cell('Radius', di('r',el.r??12)), cell('Color', clr()));
       break;
-    case 'outlet': h+=row('Rotation°', ni('rot',el.rot??0,0,360,45)); break;
+    case 'outlet':
+      h+=row2(cell('Rot°', ni('rot',el.rot??0,0,360,45)), '');
+      break;
     case 'text':
-      h+=row('Text',      ti('txt',el.txt,'Enter text…'));
-      h+=row('Font size', ni('fs',el.fs??12,6,72,1));
-      h+=row('Rotation°', ni('rot',el.rot??0,-360,360,15));
+      h+=row('Text', ti('txt',el.txt,'Enter text…'));
+      h+=row2(cell('Size', ni('fs',el.fs??12,6,72,1)), cell('Rot°', ni('rot',el.rot??0,-360,360,15)));
       break;
   }
   h+=row('Annotation', ti('anno',el.anno,'Notes, dimensions…'));
@@ -2180,7 +2240,7 @@ document.addEventListener('keyup', e=>{ UI.shift=e.shiftKey; });
 function setTool(tool){
   UI.tool=tool;
   // Cancel any in-progress operations
-  UI.draw=null;
+  UI.draw=null; UI.rot=null;
   if(UI.condPts){ finishCond(); UI.condPts=null; }
   UI.selId=null; closePP();
   document.querySelectorAll('.tbtn').forEach(b=>b.classList.toggle('on',b.dataset.tool===tool));
