@@ -241,11 +241,11 @@ canvas { display:block; width:100%; height:100%; touch-action:none; }
 // ═══════════════════════════════════════════════════════════════
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════
-const SNAP   = 0.25;        // inches – quarter inch grid
+const SNAP   = 0.25;        // inches – finest quarter inch grid (typed precision)
 const DZOOM  = 8;           // default pixels per inch
-const MINZ   = 0.5;
+const MINZ   = 0.2;         // allow zooming out far enough to see 10' grid
 const MAXZ   = 128;
-const DWALT  = 1;           // default wall/line thickness (inches)
+const DWALT  = 3.5;         // default wall/line thickness (inches – 2x4 stud wall)
 const SKEY   = 'bp_v3';
 const MXUNDO = 40;
 
@@ -258,8 +258,8 @@ const TLBL = { wall:'Line',door:'Door',window:'Window',beam:'Support Beam',
                rect:'Rectangle',circ:'Circle' };
 
 const HINTS = {
-  select:'Tap to select · Drag to move · Pinch/scroll to zoom · Dbl-tap to edit',
-  wall:'Drag to draw line · Hold Shift for orthogonal · Edit angle in properties',
+  select:'Tap to select · Drag to move · Pinch/scroll to zoom · Dbl-tap to edit · Lock in properties',
+  wall:'Drag to draw · Shift = orthogonal · Snaps to grid · Set exact Length/Thickness in properties',
   door:'Drag to place door (sets width & direction)',
   window:'Drag along wall to define window',
   beam:'Drag to define support beam rectangle',
@@ -318,6 +318,61 @@ const wcy = (sy) => (sy - cv.height/2)/VP.z + VP.y;
 
 const snap1 = (v)    => Math.round(v / SNAP) * SNAP;
 const snapP  = (x,y) => [snap1(x), snap1(y)];
+
+// Adaptive grid: returns [minor, major] spacing in inches for the current zoom.
+// As you zoom out the increments grow: 1' → 5' → 10' … so the outer perimeter
+// is easy to lay out on mobile.
+function gridSteps(z){
+  if(z>=32)   return [0.25, 12];   // ¼"  minor · 1' major
+  if(z>=16)   return [0.5,  12];   // ½"  minor · 1' major
+  if(z>=6)    return [1,    12];   // 1"  minor · 1' major
+  if(z>=2)    return [6,    12];   // 6"  minor · 1' major
+  if(z>=0.9)  return [12,   60];   // 1'  minor · 5' major
+  if(z>=0.45) return [60,  120];   // 5'  minor · 10' major
+  return             [120, 600];   // 10' minor · 50' major
+}
+// Pointer snap increment follows the finest visible grid cell so drawing/dragging
+// snaps to whatever the user can actually see.
+function psnap(){ return gridSteps(VP.z)[0]; }
+function snapG(v){ const s=psnap(); return Math.round(v/s)*s; }
+function snapGP(x,y){ return [snapG(x), snapG(y)]; }
+
+// Parse a dimension string into inches. Accepts:
+//   32          → 32"          (bare number = inches)
+//   32'         → 384"         (feet)
+//   12'-6"  12'6  2' 6"        → feet + inches
+//   6"          → 6"
+//   12x32  12*32  12×32        → multiply (e.g. 12 in/ft × 32 ft = 384")
+// Returns a Number, or null if it can't be parsed.
+function parseDim(str){
+  if(str==null) return null;
+  let s=String(str).trim().toLowerCase()
+        .replace(/’/g,"'").replace(/”/g,'"').replace(/×/g,'x')
+        .replace(/'\s*-\s*/g,"' ");           // 12'-6"  →  12' 6"
+  if(!s) return null;
+  // Multiplication of plain numbers
+  if(/[x*]/.test(s)){
+    const parts=s.split(/[x*]/).map(t=>t.trim());
+    if(parts.length>1 && parts.every(t=>/^-?\d*\.?\d+$/.test(t)))
+      return parts.reduce((a,t)=>a*parseFloat(t),1);
+  }
+  let neg=false;
+  if(s[0]==='-'){ neg=true; s=s.slice(1); }
+  let total=0;
+  const ftM=s.match(/(\d*\.?\d+)\s*(?:'|ft|feet|f)/);
+  if(ftM){ total+=parseFloat(ftM[1])*12; s=s.replace(ftM[0],' '); }
+  const inM=s.match(/(\d*\.?\d+)\s*(?:"|in|inch|inches)/);
+  if(inM){ total+=parseFloat(inM[1]); s=s.replace(inM[0],' '); }
+  if(!ftM && !inM){
+    const bare=s.match(/-?\d*\.?\d+/);
+    if(!bare) return null;
+    total+=parseFloat(bare[0]);
+  } else if(!inM){
+    const bare=s.match(/\d*\.?\d+/);            // trailing bare inches: 12' 6
+    if(bare) total+=parseFloat(bare[0]);
+  }
+  return neg?-total:total;
+}
 
 function fmtIn(inches) {
   if (inches < 0) return '-' + fmtIn(-inches);
@@ -412,12 +467,21 @@ function anchorW(el){
 // ═══════════════════════════════════════════════════════════════
 // BOUNDS & GEOMETRY
 // ═══════════════════════════════════════════════════════════════
+// Unit vector for the direction a wall's thickness extends. By default it is
+// perpendicular to the wall (so thickness is always visible, whatever the
+// orientation); el.angle skews/flips which side it comes out from (180 = flip).
+function wallNormal(el){
+  const th=Math.atan2((el.y2-el.y1),(el.x2-el.x1));
+  const a=th + (el.angle||0)*Math.PI/180;
+  return [-Math.sin(a), Math.cos(a)];
+}
+
 function bounds(el){
   switch(el.type){
     case 'wall': {
       const t=el.t||DWALT;
-      const a=(el.angle||0)*Math.PI/180;
-      const ox=-Math.sin(a)*t, oy=Math.cos(a)*t;
+      const [nx,ny]=wallNormal(el);
+      const ox=nx*t, oy=ny*t;
       return {
         x1:Math.min(el.x1,el.x2,el.x1+ox,el.x2+ox),
         y1:Math.min(el.y1,el.y2,el.y1+oy,el.y2+oy),
@@ -480,8 +544,7 @@ function hitEl(el, wx2, wy2){
       const t=el.t||DWALT;
       const seg=ptSegD(wx2,wy2,el.x1,el.y1,el.x2,el.y2);
       if(seg>t+pad) return false;
-      const a=(el.angle||0)*Math.PI/180;
-      const ox=-Math.sin(a), oy=Math.cos(a);
+      const [ox,oy]=wallNormal(el);
       const dx=el.x2-el.x1, dy=el.y2-el.y1, len=Math.hypot(dx,dy);
       if(len<0.001) return seg<=pad;
       const tu=((wx2-el.x1)*dx+(wy2-el.y1)*dy)/(len*len);
@@ -554,12 +617,7 @@ function render(){
 // ── Grid ──
 function drawGrid(W,H,p){
   const z=VP.z;
-  let mIn=12;
-  if(z>=2)  mIn=6;
-  if(z>=6)  mIn=1;
-  if(z>=16) mIn=0.5;
-  if(z>=32) mIn=0.25;
-  const majIn=12;
+  const [mIn,majIn]=gridSteps(z);
 
   const wL=wcx(0),wT=wcy(0),wR=wcx(W),wB=wcy(H);
 
@@ -587,7 +645,7 @@ function drawGrid(W,H,p){
   if(oy2>0&&oy2<H){ctx.moveTo(0,oy2);ctx.lineTo(W,oy2);}
   ctx.stroke(); ctx.setLineDash([]);
 
-  if(z>=3){
+  if(majIn*z>=34){
     ctx.fillStyle=p.gTxt; ctx.font='9px monospace';
     for(let x=Math.floor(wL/majIn)*majIn;x<=wR;x+=majIn){
       const px=scx(x); if(px>15&&px<W-5) ctx.fillText(Math.round(x/12)+"'",px+2,11);
@@ -626,7 +684,8 @@ function drawScaleBar(W,H,p){
 
 // ── Draw one element ──
 function drawEl(el, p, sel, hov){
-  const clr = sel?p.sel:(hov?p.hov:p.line);
+  const base = el.color || p.line;
+  const clr = sel?p.sel:(hov?p.hov:base);
   ctx.save();
   ctx.strokeStyle=clr; ctx.fillStyle=clr;
   ctx.lineWidth=sel?2:1.5; ctx.setLineDash([]);
@@ -660,22 +719,37 @@ function drawEl(el, p, sel, hov){
       ctx.setLineDash([]);
     }
   }
+  // Lock indicator
+  if(el.locked){
+    const b=bounds(el);
+    if(b){
+      ctx.setLineDash([]);
+      ctx.font='11px sans-serif'; ctx.textAlign='left'; ctx.textBaseline='bottom';
+      ctx.globalAlpha=sel?1:0.7;
+      ctx.fillText('🔒', scx(b.x2)+3, scy(b.y1)+2);
+      ctx.globalAlpha=1;
+    }
+  }
   ctx.restore();
 }
 
 function rWall(el,clr){
   const x1=scx(el.x1),y1=scy(el.y1),x2=scx(el.x2),y2=scy(el.y2);
-  const tk=scl(el.t||DWALT);
   const dx=x2-x1,dy=y2-y1,len=Math.hypot(dx,dy);
   if(len<1) return;
-  const a=(el.angle||0)*Math.PI/180;
-  const ox=-Math.sin(a)*tk, oy=Math.cos(a)*tk;
+  const [nx,ny]=wallNormal(el);
+  // Perpendicular thickness, clamped so a thin wall never disappears on screen.
+  const tk=Math.max(scl(el.t||DWALT), 2);
+  const ox=nx*tk, oy=ny*tk;
   ctx.save();
   ctx.fillStyle=clr;
   ctx.beginPath();
   ctx.moveTo(x1,y1); ctx.lineTo(x2,y2);
   ctx.lineTo(x2+ox,y2+oy); ctx.lineTo(x1+ox,y1+oy);
   ctx.closePath(); ctx.fill();
+  // Crisp outline so the wall edges stay legible over the grid.
+  ctx.strokeStyle=UI.bp?'rgba(6,20,35,.9)':'rgba(255,255,255,.85)';
+  ctx.lineWidth=0.75; ctx.stroke();
   ctx.restore();
 }
 
@@ -845,11 +919,11 @@ function drawPrev(d,p){
   switch(d.type){
     case 'wall':{
       const x1=scx(d.x1),y1=scy(d.y1),x2=scx(d.x2),y2=scy(d.y2);
-      const tk=scl(d.t||DWALT);
+      const tk=Math.max(scl(d.t||DWALT), 2);
       const dx=x2-x1,dy=y2-y1,len=Math.hypot(dx,dy);
       if(len>0){
-        const a=(d.angle||0)*Math.PI/180;
-        const ox=-Math.sin(a)*tk, oy=Math.cos(a)*tk;
+        const [nx,ny]=wallNormal(d);
+        const ox=nx*tk, oy=ny*tk;
         ctx.save();
         ctx.fillStyle=clr+'88';
         ctx.beginPath();
@@ -965,7 +1039,7 @@ cv.addEventListener('mousedown',e=>{
   const p=gpos(e);
   ptr.down=true; ptr.sx0=p.sx; ptr.sy0=p.sy; ptr.sxL=p.sx; ptr.syL=p.sy; ptr.moved=false;
   UI.shift=e.shiftKey;
-  const [cwx2,cwy2]=snapP(wcx(p.sx),wcy(p.sy));
+  const [cwx2,cwy2]=snapGP(wcx(p.sx),wcy(p.sy));
   toolDown(cwx2,cwy2);
 },{passive:false});
 
@@ -975,7 +1049,7 @@ cv.addEventListener('mousemove',e=>{
   const dx=p.sx-ptr.sxL, dy=p.sy-ptr.syL;
   if(Math.abs(p.sx-ptr.sx0)>3||Math.abs(p.sy-ptr.sy0)>3) ptr.moved=true;
   ptr.sxL=p.sx; ptr.syL=p.sy;
-  const [cwx2,cwy2]=snapP(wcx(p.sx),wcy(p.sy));
+  const [cwx2,cwy2]=snapGP(wcx(p.sx),wcy(p.sy));
   UI.curW={x:cwx2,y:cwy2}; UI.shift=e.shiftKey;
   if(ptr.down) toolDrag(cwx2,cwy2,dx,dy);
   else         toolHover(cwx2,cwy2);
@@ -985,7 +1059,7 @@ cv.addEventListener('mousemove',e=>{
 cv.addEventListener('mouseup',e=>{
   e.preventDefault();
   const p=gpos(e);
-  const [cwx2,cwy2]=snapP(wcx(p.sx),wcy(p.sy));
+  const [cwx2,cwy2]=snapGP(wcx(p.sx),wcy(p.sy));
   if(ptr.down) toolUp(cwx2,cwy2,ptr.moved);
   ptr.down=false; reqRender();
 },{passive:false});
@@ -995,14 +1069,14 @@ cv.addEventListener('mouseleave',()=>{ ptr.down=false; UI.hovId=null; reqRender(
 cv.addEventListener('contextmenu',e=>{
   e.preventDefault();
   const p=gpos(e);
-  const [cwx2,cwy2]=snapP(wcx(p.sx),wcy(p.sy));
+  const [cwx2,cwy2]=snapGP(wcx(p.sx),wcy(p.sy));
   ctxAction(cwx2,cwy2);
 });
 
 cv.addEventListener('dblclick',e=>{
   e.preventDefault();
   const p=gpos(e);
-  const [cwx2,cwy2]=snapP(wcx(p.sx),wcy(p.sy));
+  const [cwx2,cwy2]=snapGP(wcx(p.sx),wcy(p.sy));
   toolDbl(cwx2,cwy2);
 });
 
@@ -1026,7 +1100,7 @@ cv.addEventListener('touchstart',e=>{
   ptr.pinch=false;
   const t=e.touches[0], p=gposT(t);
   ptr.down=true; ptr.sx0=p.sx; ptr.sy0=p.sy; ptr.sxL=p.sx; ptr.syL=p.sy; ptr.moved=false;
-  const [cwx2,cwy2]=snapP(wcx(p.sx),wcy(p.sy));
+  const [cwx2,cwy2]=snapGP(wcx(p.sx),wcy(p.sy));
   UI.curW={x:cwx2,y:cwy2};
   toolDown(cwx2,cwy2);
   longTm=setTimeout(()=>{
@@ -1052,7 +1126,7 @@ cv.addEventListener('touchmove',e=>{
   const dx=p.sx-ptr.sxL, dy=p.sy-ptr.syL;
   if(Math.abs(p.sx-ptr.sx0)>5||Math.abs(p.sy-ptr.sy0)>5) ptr.moved=true;
   ptr.sxL=p.sx; ptr.syL=p.sy;
-  const [cwx2,cwy2]=snapP(wcx(p.sx),wcy(p.sy));
+  const [cwx2,cwy2]=snapGP(wcx(p.sx),wcy(p.sy));
   UI.curW={x:cwx2,y:cwy2};
   if(ptr.down) toolDrag(cwx2,cwy2,dx,dy);
   reqRender();
@@ -1063,7 +1137,7 @@ cv.addEventListener('touchend',e=>{
   if(ptr.pinch&&e.touches.length<2){ ptr.pinch=false; saveL(); return; }
   if(!ptr.down) return;
   const ct=e.changedTouches[0], p=gposT(ct);
-  const [cwx2,cwy2]=snapP(wcx(p.sx),wcy(p.sy));
+  const [cwx2,cwy2]=snapGP(wcx(p.sx),wcy(p.sy));
   toolUp(cwx2,cwy2,ptr.moved);
   ptr.down=false; reqRender();
 },{passive:false});
@@ -1210,11 +1284,16 @@ function finishCond(){
 // ── Select tool ──
 function selDown(cwx2,cwy2){
   const el=hitTest(cwx2,cwy2);
-  if(el){
+  if(el && !el.locked){
     UI.selId=el.id; UI.dragEl=el; UI.dragging=false;
     UI.dragSnap=snapSt();
     const an=anchorW(el);
     UI.dragOffW={x:cwx2-an.x, y:cwy2-an.y};
+    showPP(el); render();
+  } else if(el && el.locked){
+    // Locked: select & show properties (to unlock), but never move — drag pans.
+    UI.selId=el.id; UI.dragEl=null;
+    UI.vpDrag={x:VP.x,y:VP.y,sx:ptr.sx0,sy:ptr.sy0};
     showPP(el); render();
   } else {
     UI.selId=null; UI.dragEl=null;
@@ -1253,21 +1332,43 @@ function showPP(el){
   document.getElementById('ppfields').innerHTML  = buildPPF(el);
   document.getElementById('pp').classList.add('open');
   let ppUndoPushed = false;
+  const pushOnce=()=>{ if(!ppUndoPushed){ pushUndo(); ppUndoPushed=true; } };
   // Bind changes
   document.querySelectorAll('#ppfields [data-p]').forEach(inp=>{
-    const ev = inp.type==='checkbox'?'change':'input';
+    const isDim = inp.hasAttribute('data-dim');
+    const ev = (inp.type==='checkbox'||isDim) ? 'change' : 'input';
     inp.addEventListener(ev,()=>{
-      if(!ppUndoPushed){ pushUndo(); ppUndoPushed=true; }
-      let v;
-      if(inp.type==='checkbox') v=inp.checked;
-      else if(inp.type==='number'){
-        v=parseFloat(inp.value)||0;
-        if(['x','y','x1','y1','x2','y2'].includes(inp.dataset.p)) v=snap1(v);
+      const cur=getEl(el.id); if(!cur) return;
+      const p=inp.dataset.p;
+      if(inp.type==='checkbox'){ pushOnce(); setEl(el.id,{[p]:inp.checked}); return; }
+      if(isDim){
+        const parsed=parseDim(inp.value);
+        if(parsed==null){                     // couldn't parse → restore prior value
+          const prior = p==='len' ? Math.hypot(cur.x2-cur.x1,cur.y2-cur.y1) : cur[p];
+          inp.value=fmtIn(prior||0); return;
+        }
+        const v=snap1(parsed);
+        pushOnce();
+        if(p==='len'){                         // set wall length along its direction
+          let ang=Math.atan2(cur.y2-cur.y1,cur.x2-cur.x1);
+          if(!isFinite(ang)||(cur.x1===cur.x2&&cur.y1===cur.y2)) ang=0;
+          setEl(el.id,{x2:snap1(cur.x1+Math.cos(ang)*v), y2:snap1(cur.y1+Math.sin(ang)*v)});
+        } else {
+          setEl(el.id,{[p]:v});
+        }
+        inp.value=fmtIn(v);
+        return;
       }
-      else v=inp.value;
-      setEl(el.id,{[inp.dataset.p]:v});
+      pushOnce();
+      let v;
+      if(inp.type==='number') v=parseFloat(inp.value)||0;
+      else v=inp.value;                        // text (label/txt/anno) or color hex
+      setEl(el.id,{[p]:v});
     });
   });
+  // "Auto" color reset
+  const rst=document.querySelector('#ppfields [data-clr-reset]');
+  if(rst) rst.addEventListener('click',()=>{ pushOnce(); setEl(el.id,{color:null}); const e2=getEl(el.id); if(e2) showPP(e2); });
 }
 
 function closePP(){ document.getElementById('pp').classList.remove('open'); }
@@ -1275,40 +1376,49 @@ function closePP(){ document.getElementById('pp').classList.remove('open'); }
 function buildPPF(el){
   const row=(l,h)=>`<div class="pr"><span class="pl">${l}</span>${h}</div>`;
   const ti=(p,v,ph='')=>`<input class="pi" type="text" data-p="${p}" value="${esc(v||'')}" placeholder="${ph}">`;
+  // Dimension input: shows feet-inches, accepts 32', 12'-6", 6", 12x32, 384 …
+  const di=(p,v)=>`<input class="pi" type="text" autocapitalize="off" autocorrect="off" data-p="${p}" data-dim value="${fmtIn(v||0)}">`;
   const ni=(p,v,mn,mx,st=0.25)=>`<input class="pi" type="number" data-p="${p}" value="${v??0}" min="${mn}" max="${mx}" step="${st}">`;
   const ci=(p,v)=>`<input class="pck" type="checkbox" data-p="${p}" ${v?'checked':''}>`;
+  const defColor=UI.bp?'#9ad4f5':'#111111';
+  const clr=()=>`<input class="pck" style="width:38px;height:26px;padding:0;border:none;background:none" type="color" data-p="color" value="${el.color||defColor}"><button type="button" data-clr-reset style="margin-left:8px;padding:4px 9px;font-size:11px;border-radius:5px;border:1px solid var(--border);background:rgba(255,255,255,.08);color:var(--main);cursor:pointer">Auto</button>`;
   let h='';
   h+=row('Label', ti('lbl',el.lbl,'Optional label'));
+  h+=row('Lock', ci('locked',el.locked));
   // Position fields
   if(el.type==='wall'||el.type==='window'){
-    h+=row('X1"', ni('x1',el.x1??0,-9999,9999));
-    h+=row('Y1"', ni('y1',el.y1??0,-9999,9999));
-    h+=row('X2"', ni('x2',el.x2??0,-9999,9999));
-    h+=row('Y2"', ni('y2',el.y2??0,-9999,9999));
+    h+=row('Start X', di('x1',el.x1));
+    h+=row('Start Y', di('y1',el.y1));
+    h+=row('End X',   di('x2',el.x2));
+    h+=row('End Y',   di('y2',el.y2));
   } else if(el.type!=='conduit'){
-    h+=row('X"', ni('x',el.x??0,-9999,9999));
-    h+=row('Y"', ni('y',el.y??0,-9999,9999));
+    h+=row('X', di('x',el.x));
+    h+=row('Y', di('y',el.y));
   }
   switch(el.type){
     case 'wall':
-      h+=row('Thickness"', ni('t',el.t??DWALT,0.25,24));
-      h+=row('Angle°',     ni('angle',el.angle??0,0,360,90));
+      h+=row('Length', di('len',Math.hypot((el.x2-el.x1),(el.y2-el.y1))));
+      h+=row('Thickness', di('t',el.t??DWALT));
+      h+=row('Side°',  ni('angle',el.angle??0,-360,360,15));
+      h+=row('Color',  clr());
       break;
     case 'door':
-      h+=row('Width"',    ni('width',el.width??30,12,72));
+      h+=row('Width',     di('width',el.width??30));
       h+=row('Rotation°', ni('rot',el.rot??0,-360,360,15));
       h+=row('Flip swing',ci('flip',el.flip)); break;
     case 'beam': case 'light':
-      h+=row('Width"',  ni('w',el.w??12,1,600));
-      h+=row('Height"', ni('h',el.h??12,1,600));
+      h+=row('Width',  di('w',el.w??12));
+      h+=row('Height', di('h',el.h??12));
       if(el.type==='light') h+=row('Tubes', ni('tubes',el.tubes??2,1,8,1));
       break;
     case 'rect':
-      h+=row('Width"',  ni('w',el.w??24,0.25,600));
-      h+=row('Height"', ni('h',el.h??24,0.25,600));
+      h+=row('Width',  di('w',el.w??24));
+      h+=row('Height', di('h',el.h??24));
+      h+=row('Color',  clr());
       break;
     case 'circ':
-      h+=row('Radius"', ni('r',el.r??12,0.25,600));
+      h+=row('Radius', di('r',el.r??12));
+      h+=row('Color',  clr());
       break;
     case 'outlet': h+=row('Rotation°', ni('rot',el.rot??0,0,360,45)); break;
     case 'text':
@@ -1408,7 +1518,8 @@ function drawExport(ectx, ox, oy, z){
   ectx.save();
   for(const el of S.els){
     ectx.save();
-    ectx.strokeStyle='#000'; ectx.fillStyle='#000';
+    const ecol=el.color||'#000';
+    ectx.strokeStyle=ecol; ectx.fillStyle=ecol;
     ectx.lineWidth=1.5; ectx.setLineDash([]);
 
     switch(el.type){
@@ -1417,8 +1528,8 @@ function drawExport(ectx, ox, oy, z){
         const tk=esl(el.t||DWALT);
         const len=Math.hypot(x2-x1,y2-y1);
         if(len<1){ectx.restore();continue;}
-        const a=(el.angle||0)*Math.PI/180;
-        const ox=-Math.sin(a)*tk, oy=Math.cos(a)*tk;
+        const [nx,ny]=wallNormal(el);
+        const ox=nx*tk, oy=ny*tk;
         ectx.beginPath();
         ectx.moveTo(x1,y1); ectx.lineTo(x2,y2);
         ectx.lineTo(x2+ox,y2+oy); ectx.lineTo(x1+ox,y1+oy);
@@ -1505,7 +1616,7 @@ function drawExport(ectx, ox, oy, z){
         if(Math.abs(pw)<1||Math.abs(ph)<1){ectx.restore();continue;}
         ectx.fillStyle='rgba(0,0,0,.04)';
         ectx.fillRect(px,py,pw,ph);
-        ectx.lineWidth=1.5; ectx.strokeStyle='#000';
+        ectx.lineWidth=1.5; ectx.strokeStyle=ecol;
         ectx.strokeRect(px,py,pw,ph);
         break;
       }
@@ -1514,7 +1625,7 @@ function drawExport(ectx, ox, oy, z){
         const px=esx(el.x),py=esy(el.y),pr=esl(el.r);
         ectx.fillStyle='rgba(0,0,0,.04)';
         ectx.beginPath(); ectx.arc(px,py,pr,0,Math.PI*2);
-        ectx.fill(); ectx.lineWidth=1.5; ectx.strokeStyle='#000'; ectx.stroke();
+        ectx.fill(); ectx.lineWidth=1.5; ectx.strokeStyle=ecol; ectx.stroke();
         break;
       }
       case 'text':{
@@ -1617,9 +1728,9 @@ function generateSVG(){
         const tk=esl(el.t||DWALT);
         const len=Math.hypot(x2-x1,y2-y1);
         if(len<1) break;
-        const a=(el.angle||0)*Math.PI/180;
-        const ox2=-Math.sin(a)*tk, oy2=Math.cos(a)*tk;
-        s+=`<polygon points="${x1},${y1} ${x2},${y2} ${x2+ox2},${y2+oy2} ${x1+ox2},${y1+oy2}" fill="black"/>`;
+        const [nx,ny]=wallNormal(el);
+        const ox2=nx*tk, oy2=ny*tk;
+        s+=`<polygon points="${x1},${y1} ${x2},${y2} ${x2+ox2},${y2+oy2} ${x1+ox2},${y1+oy2}" fill="${el.color||'black'}"/>`;
         break;
       }
       case 'door':{
@@ -1698,13 +1809,13 @@ function generateSVG(){
       case 'rect':{
         const px=esx(el.x),py=esy(el.y),pw=esl(el.w||0),ph=esl(el.h||0);
         if(!pw||!ph) break;
-        s+=`<rect x="${px}" y="${py}" width="${pw}" height="${ph}" fill="rgba(0,0,0,0.04)" stroke="black" stroke-width="1.5"/>`;
+        s+=`<rect x="${px}" y="${py}" width="${pw}" height="${ph}" fill="rgba(0,0,0,0.04)" stroke="${el.color||'black'}" stroke-width="1.5"/>`;
         break;
       }
       case 'circ':{
         if(!(el.r>0)) break;
         const px=esx(el.x),py=esy(el.y),pr=esl(el.r);
-        s+=`<circle cx="${px}" cy="${py}" r="${pr}" fill="rgba(0,0,0,0.04)" stroke="black" stroke-width="1.5"/>`;
+        s+=`<circle cx="${px}" cy="${py}" r="${pr}" fill="rgba(0,0,0,0.04)" stroke="${el.color||'black'}" stroke-width="1.5"/>`;
         break;
       }
       case 'text':{
