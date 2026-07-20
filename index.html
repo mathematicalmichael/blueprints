@@ -96,7 +96,7 @@ canvas { display:block; width:100%; height:100%; touch-action:none; }
 .tbtn.on { background:var(--accent); border-color:var(--accent); color:#fff; box-shadow:0 0 8px rgba(233,69,96,.5); }
 
 /* ── Properties panel (slide up) ── */
-#pp {
+#pp, #lp {
   position:fixed; bottom:0; left:0; right:0;
   background:var(--panel); border-top:2px solid var(--accent);
   padding:10px 14px 14px; transform:translateY(100%);
@@ -104,7 +104,23 @@ canvas { display:block; width:100%; height:100%; touch-action:none; }
   z-index:100; max-height:58vh; overflow-y:auto;
   -webkit-overflow-scrolling:touch;
 }
-#pp.open { transform:translateY(0); }
+#pp.open, #lp.open { transform:translateY(0); }
+
+/* ── Layers ── */
+.lrow { display:flex; align-items:center; gap:6px; padding:5px 6px; margin-bottom:5px;
+        border:1px solid var(--border); border-radius:6px; background:rgba(255,255,255,.04); }
+.lrow.active { border-color:var(--blue); background:rgba(79,195,247,.14); }
+.lrow.hidden .lname { opacity:.4; text-decoration:line-through; }
+.lname { flex:1; font-size:12px; color:var(--main); cursor:pointer; white-space:nowrap;
+         overflow:hidden; text-overflow:ellipsis; }
+.lcount { font-size:10px; color:var(--muted); flex-shrink:0; }
+.lbtn { background:rgba(255,255,255,.07); border:1px solid var(--border); color:var(--main);
+        border-radius:4px; min-width:28px; height:28px; font-size:13px; cursor:pointer;
+        display:flex; align-items:center; justify-content:center; flex-shrink:0; padding:0 4px; }
+.lbtn:hover { background:rgba(79,195,247,.2); }
+.lbtn:disabled { opacity:.3; cursor:default; }
+.lbtn.del { color:#ff8b7b; }
+.lactive-tag { font-size:9px; color:var(--blue); flex-shrink:0; }
 .pph { display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; }
 .pptitle { font-size:13px; font-weight:600; color:var(--blue); }
 .ppc { background:none; border:none; color:var(--muted); font-size:20px; cursor:pointer; padding:0 4px; line-height:1; }
@@ -168,6 +184,7 @@ canvas { display:block; width:100%; height:100%; touch-action:none; }
     <div class="hsep"></div>
     <button class="hb" id="btheme" title="Toggle display style">🌙</button>
     <button class="hb" id="bgrid" title="Toggle grid">⊞</button>
+    <button class="hb" id="blayers" title="Layers">⧉ Layers</button>
     <div class="hsep"></div>
     <div id="wt-row">
       <span id="wt-label">Line&nbsp;t:</span>
@@ -217,6 +234,21 @@ canvas { display:block; width:100%; height:100%; touch-action:none; }
     <button class="pb pbsec" id="pplock">🔒 Lock</button>
     <button class="pb pbsec" id="ppedit">✏ Edit</button>
     <button class="pb pbdel" id="ppdel">Delete</button>
+  </div>
+</div>
+
+<!-- Layers panel -->
+<div id="lp">
+  <div class="pph">
+    <span class="pptitle">Layers</span>
+    <button class="ppc" id="lpclose">✕</button>
+  </div>
+  <div style="font-size:10px;color:var(--muted);margin-bottom:8px">
+    New objects go on the active layer · tap a name to make it active · hide a layer to skip it when selecting
+  </div>
+  <div id="lplist"></div>
+  <div class="pbr">
+    <button class="pb pbsec" id="lpadd">＋ Add Layer</button>
   </div>
 </div>
 
@@ -288,6 +320,7 @@ let UI = {
   dragEl:null, dragging:false, dragOffW:null, dragSnap:null,
   vpDrag:null,
   defWallT: DWALT,
+  activeLayer: null,   // id of layer new elements are added to
 };
 
 let undos=[], redos=[];
@@ -401,12 +434,13 @@ function loadL(){
     if(d.S){ S={ els:[], nid:1, ...d.S }; }
     if(d.VP){ VP={...VP,...d.VP}; }
   }catch(_){}
+  ensureLayers();
 }
 
 // ═══════════════════════════════════════════════════════════════
 // UNDO / REDO
 // ═══════════════════════════════════════════════════════════════
-const snapSt = () => JSON.stringify({ els:S.els, nid:S.nid });
+const snapSt = () => JSON.stringify({ els:S.els, nid:S.nid, layers:S.layers, nlid:S.nlid });
 
 function pushUndo(){
   undos.push(snapSt());
@@ -417,7 +451,10 @@ function pushUndo(){
 function applySt(snap){
   const d=JSON.parse(snap);
   S.els=d.els; S.nid=d.nid;
+  if(d.layers){ S.layers=d.layers; S.nlid=d.nlid; }
+  ensureLayers();
   UI.selId=null; saveL(); render(); closePP();
+  if(document.getElementById('lp').classList.contains('open')) renderLayerList();
 }
 
 function undo(){ if(!undos.length)return; redos.push(snapSt()); applySt(undos.pop()); }
@@ -428,8 +465,45 @@ function redo(){ if(!redos.length)return; undos.push(snapSt()); applySt(redos.po
 // ═══════════════════════════════════════════════════════════════
 function genId(){ return 'e'+(S.nid++); }
 
+// ── Layers ──────────────────────────────────────────────────────
+// S.layers = [{id,name,visible}] where array order is draw order
+// (index 0 = bottom). Elements reference a layer via el.layer.
+// Backward compatible: older saves have no layers → one default layer
+// is created and every element is assigned to it.
+function ensureLayers(){
+  if(!Array.isArray(S.layers) || !S.layers.length){
+    S.layers=[{id:'L1', name:'Layer 1', visible:true}];
+  }
+  if(S.nlid==null){
+    let mx=0;
+    for(const l of S.layers){ const m=/^L(\d+)$/.exec(l.id||''); if(m) mx=Math.max(mx,+m[1]); }
+    S.nlid=mx+1;
+  }
+  for(const l of S.layers){ if(l.visible===undefined) l.visible=true; }
+  const def=S.layers[0].id;
+  for(const el of S.els){ if(!el.layer || !S.layers.some(l=>l.id===el.layer)) el.layer=def; }
+  if(!UI.activeLayer || !S.layers.some(l=>l.id===UI.activeLayer)) UI.activeLayer=def;
+}
+
+function getLayer(id){ return S.layers && S.layers.find(l=>l.id===id) || null; }
+function layerVisible(id){ const l=getLayer(id); return !l || l.visible!==false; }
+
+// Elements in draw order (bottom→top), honouring layer order and
+// skipping hidden layers. Falls back to raw element order if layers
+// haven't been initialised yet.
+function drawOrder(){
+  if(!Array.isArray(S.layers) || !S.layers.length) return S.els;
+  const out=[];
+  for(const lay of S.layers){
+    if(lay.visible===false) continue;
+    for(const el of S.els){ if(el.layer===lay.id) out.push(el); }
+  }
+  return out;
+}
+
 function addEl(type, props){
   const el={ id:genId(), type, lbl:'', anno:'', ...props };
+  if(!el.layer) el.layer = UI.activeLayer || (S.layers&&S.layers[0]&&S.layers[0].id);
   S.els.push(el); saveL(); return el;
 }
 
@@ -479,6 +553,24 @@ function wallNormal(el){
   return [-Math.sin(a), Math.cos(a)];
 }
 
+// Rotation helpers for box-shaped elements (rect / beam / light).
+function rectCenter(el){ return {x:el.x+(el.w||0)/2, y:el.y+(el.h||0)/2}; }
+function rotPt(px,py,cx,cy,deg){
+  const a=deg*Math.PI/180, c=Math.cos(a), s=Math.sin(a);
+  const dx=px-cx, dy=py-cy;
+  return {x:cx+dx*c-dy*s, y:cy+dx*s+dy*c};
+}
+// Axis-aligned bounds of a possibly-rotated box.
+function boxBounds(el){
+  const w=el.w||0, h=el.h||0, rot=el.rot||0;
+  if(!rot) return {x1:el.x, y1:el.y, x2:el.x+w, y2:el.y+h};
+  const c=rectCenter(el);
+  const pts=[[el.x,el.y],[el.x+w,el.y],[el.x+w,el.y+h],[el.x,el.y+h]]
+    .map(([px,py])=>rotPt(px,py,c.x,c.y,rot));
+  const xs=pts.map(p=>p.x), ys=pts.map(p=>p.y);
+  return {x1:Math.min(...xs), y1:Math.min(...ys), x2:Math.max(...xs), y2:Math.max(...ys)};
+}
+
 function bounds(el){
   switch(el.type){
     case 'wall': {
@@ -496,9 +588,9 @@ function bounds(el){
       return { x1:Math.min(el.x1,el.x2), y1:Math.min(el.y1,el.y2),
                x2:Math.max(el.x1,el.x2), y2:Math.max(el.y1,el.y2) };
     case 'beam': case 'light':
-      return { x1:el.x, y1:el.y, x2:el.x+el.w, y2:el.y+el.h };
+      return boxBounds(el);
     case 'rect':
-      return { x1:el.x, y1:el.y, x2:el.x+(el.w||0), y2:el.y+(el.h||0) };
+      return boxBounds(el);
     case 'circ':
       return { x1:el.x-(el.r||0), y1:el.y-(el.r||0), x2:el.x+(el.r||0), y2:el.y+(el.r||0) };
     case 'door': {
@@ -520,7 +612,7 @@ function bounds(el){
 
 function allBounds(){
   let x1=Infinity,y1=Infinity,x2=-Infinity,y2=-Infinity,any=false;
-  for(const el of S.els){
+  for(const el of drawOrder()){
     const b=bounds(el); if(!b) continue; any=true;
     x1=Math.min(x1,b.x1); y1=Math.min(y1,b.y1);
     x2=Math.max(x2,b.x2); y2=Math.max(y2,b.y2);
@@ -559,8 +651,10 @@ function hitEl(el, wx2, wy2){
     case 'window': return ptSegD(wx2,wy2,el.x1,el.y1,el.x2,el.y2) <= pad*2.5;
     case 'door':   return Math.hypot(wx2-el.x,wy2-el.y) <= (el.width||30)+pad;
     case 'beam': case 'light': case 'rect': {
-      const b=bounds(el);
-      return b&&wx2>=b.x1-pad&&wx2<=b.x2+pad&&wy2>=b.y1-pad&&wy2<=b.y2+pad;
+      // Test in the box's own (un-rotated) frame so rotated boxes hit correctly.
+      const w=el.w||0, h=el.h||0, c=rectCenter(el);
+      const lp=rotPt(wx2,wy2,c.x,c.y,-(el.rot||0));
+      return lp.x>=el.x-pad && lp.x<=el.x+w+pad && lp.y>=el.y-pad && lp.y<=el.y+h+pad;
     }
     case 'circ':   return Math.hypot(wx2-el.x,wy2-el.y)<=(el.r||0)+pad;
     case 'outlet': return Math.hypot(wx2-el.x,wy2-el.y) <= 1.5+pad;
@@ -580,8 +674,10 @@ function hitEl(el, wx2, wy2){
 }
 
 function hitTest(wx2,wy2){
-  for(let i=S.els.length-1;i>=0;i--)
-    if(hitEl(S.els[i],wx2,wy2)) return S.els[i];
+  // Topmost visible layer first, so overlapping objects resolve by layer order.
+  const order=drawOrder();
+  for(let i=order.length-1;i>=0;i--)
+    if(hitEl(order[i],wx2,wy2)) return order[i];
   return null;
 }
 
@@ -610,7 +706,7 @@ function render(){
   const W=cv.width, H=cv.height, p=pal();
   ctx.fillStyle=p.bg; ctx.fillRect(0,0,W,H);
   if(UI.grid) drawGrid(W,H,p);
-  for(const el of S.els) drawEl(el,p,el.id===UI.selId,el.id===UI.hovId);
+  for(const el of drawOrder()) drawEl(el,p,el.id===UI.selId,el.id===UI.hovId);
   if(UI.draw) drawPrev(UI.draw,p);
   if(UI.condPts?.length) drawCondPrev(p);
   drawScaleBar(W,H,p);
@@ -892,13 +988,15 @@ function rText(el,clr,sel,p){
 }
 
 function rRect(el,clr){
-  const px=scx(el.x),py=scy(el.y),pw=scl(el.w||0),ph=scl(el.h||0);
+  const pw=scl(el.w||0),ph=scl(el.h||0);
   if(Math.abs(pw)<1||Math.abs(ph)<1) return;
+  const c=rectCenter(el);
   ctx.save();
+  ctx.translate(scx(c.x),scy(c.y)); ctx.rotate((el.rot||0)*Math.PI/180);
   ctx.strokeStyle=clr; ctx.lineWidth=1.5;
   ctx.fillStyle=UI.bp?'rgba(80,200,120,.07)':'rgba(0,120,60,.05)';
-  ctx.fillRect(px,py,pw,ph);
-  ctx.strokeRect(px,py,pw,ph);
+  ctx.fillRect(-pw/2,-ph/2,pw,ph);
+  ctx.strokeRect(-pw/2,-ph/2,pw,ph);
   ctx.restore();
 }
 
@@ -1331,6 +1429,7 @@ function selUp(cwx2,cwy2,moved){
 // PROPERTIES PANEL
 // ═══════════════════════════════════════════════════════════════
 function showPP(el){
+  closeLP();
   document.getElementById('pptitle').textContent = TLBL[el.type]||el.type;
   document.getElementById('ppfields').innerHTML  = buildPPF(el);
   document.getElementById('pp').classList.add('open');
@@ -1389,6 +1488,7 @@ function buildPPF(el){
   let h='';
   h+=row('Label', ti('lbl',el.lbl,'Optional label'));
   h+=row('Lock', ci('locked',el.locked));
+  h+=row('Layer', `<select class="pi" data-p="layer">${(S.layers||[]).map(l=>`<option value="${l.id}"${el.layer===l.id?' selected':''}>${esc(l.name)}</option>`).join('')}</select>`);
   // Position fields
   if(el.type==='wall'||el.type==='window'){
     h+=row('Start X', di('x1',el.x1));
@@ -1413,11 +1513,13 @@ function buildPPF(el){
     case 'beam': case 'light':
       h+=row('Width',  di('w',el.w??12));
       h+=row('Height', di('h',el.h??12));
+      h+=row('Rotation°', ni('rot',el.rot??0,-360,360,15));
       if(el.type==='light') h+=row('Tubes', ni('tubes',el.tubes??2,1,8,1));
       break;
     case 'rect':
       h+=row('Width',  di('w',el.w??24));
       h+=row('Height', di('h',el.h??24));
+      h+=row('Rotation°', ni('rot',el.rot??0,-360,360,15));
       h+=row('Color',  clr());
       break;
     case 'circ':
@@ -1481,6 +1583,92 @@ document.getElementById('ppedit').addEventListener('click',()=>{
   const el=UI.selId?getEl(UI.selId):null;
   if(el) showAnnoModal(el);
 });
+
+// ═══════════════════════════════════════════════════════════════
+// LAYERS PANEL
+// ═══════════════════════════════════════════════════════════════
+const lpNode=()=>document.getElementById('lp');
+function openLP(){ closePP(); renderLayerList(); lpNode().classList.add('open'); }
+function closeLP(){ lpNode().classList.remove('open'); }
+function lpOpen(){ return lpNode().classList.contains('open'); }
+
+function renderLayerList(){
+  ensureLayers();
+  const counts={};
+  for(const el of S.els) counts[el.layer]=(counts[el.layer]||0)+1;
+  let h='';
+  // Show top layer first (reverse of draw order).
+  for(let i=S.layers.length-1;i>=0;i--){
+    const l=S.layers[i];
+    const active=l.id===UI.activeLayer;
+    const vis=l.visible!==false;
+    h+=`<div class="lrow${active?' active':''}${vis?'':' hidden'}" data-lid="${l.id}">`;
+    h+=`<button class="lbtn" data-act="vis" title="Show / hide">${vis?'👁':'🚫'}</button>`;
+    h+=`<span class="lname" data-act="active" title="Make active">${esc(l.name)}</span>`;
+    h+=`<span class="lcount">${counts[l.id]||0}</span>`;
+    if(active) h+=`<span class="lactive-tag">active</span>`;
+    h+=`<button class="lbtn" data-act="up" title="Move up"${i===S.layers.length-1?' disabled':''}>▲</button>`;
+    h+=`<button class="lbtn" data-act="dn" title="Move down"${i===0?' disabled':''}>▼</button>`;
+    h+=`<button class="lbtn" data-act="ren" title="Rename">✏</button>`;
+    h+=`<button class="lbtn del" data-act="del" title="Delete"${S.layers.length<=1?' disabled':''}>🗑</button>`;
+    h+=`</div>`;
+  }
+  document.getElementById('lplist').innerHTML=h;
+}
+
+document.getElementById('lplist').addEventListener('click', e=>{
+  const btn=e.target.closest('[data-act]'); if(!btn) return;
+  const rowEl=e.target.closest('.lrow'); if(!rowEl) return;
+  const lid=rowEl.dataset.lid;
+  const idx=S.layers.findIndex(l=>l.id===lid); if(idx<0) return;
+  const l=S.layers[idx];
+  switch(btn.dataset.act){
+    case 'vis':
+      l.visible = !(l.visible!==false);
+      saveL(); render(); renderLayerList(); break;
+    case 'active':
+      UI.activeLayer=lid; renderLayerList(); break;
+    case 'up':
+      if(idx<S.layers.length-1){ pushUndo(); S.layers.splice(idx,1); S.layers.splice(idx+1,0,l); saveL(); render(); renderLayerList(); }
+      break;
+    case 'dn':
+      if(idx>0){ pushUndo(); S.layers.splice(idx,1); S.layers.splice(idx-1,0,l); saveL(); render(); renderLayerList(); }
+      break;
+    case 'ren': {
+      const nm=prompt('Layer name:', l.name);
+      if(nm!=null && nm.trim()){
+        pushUndo(); l.name=nm.trim(); saveL(); render(); renderLayerList();
+        if(UI.selId){ const s=getEl(UI.selId); if(s) showPP(s); }
+      }
+      break;
+    }
+    case 'del': {
+      if(S.layers.length<=1) break;
+      const cnt=S.els.filter(el=>el.layer===lid).length;
+      if(cnt>0 && !confirm(`Delete "${l.name}"? Its ${cnt} object(s) will move to the layer below.`)) break;
+      pushUndo();
+      S.layers.splice(idx,1);
+      const fallback=S.layers[Math.max(0,idx-1)].id;
+      for(const el of S.els){ if(el.layer===lid) el.layer=fallback; }
+      if(UI.activeLayer===lid) UI.activeLayer=fallback;
+      saveL(); render(); renderLayerList();
+      if(UI.selId){ const s=getEl(UI.selId); if(s) showPP(s); }
+      break;
+    }
+  }
+});
+
+document.getElementById('lpadd').addEventListener('click',()=>{
+  pushUndo();
+  const n=S.nlid++;
+  const l={id:'L'+n, name:'Layer '+n, visible:true};
+  S.layers.push(l);                 // new layer goes on top
+  UI.activeLayer=l.id;
+  saveL(); render(); renderLayerList();
+});
+
+document.getElementById('lpclose').addEventListener('click', closeLP);
+document.getElementById('blayers').addEventListener('click',()=>{ lpOpen()?closeLP():openLP(); });
 
 // ═══════════════════════════════════════════════════════════════
 // MODAL
@@ -1558,7 +1746,7 @@ function drawExport(ectx, ox, oy, z){
   const esl=(wl2)=>wl2*z;
 
   ectx.save();
-  for(const el of S.els){
+  for(const el of drawOrder()){
     ectx.save();
     const ecol=el.color||'#000';
     ectx.strokeStyle=ecol; ectx.fillStyle=ecol;
@@ -1654,12 +1842,15 @@ function drawExport(ectx, ox, oy, z){
         ectx.restore(); break;
       }
       case 'rect':{
-        const px=esx(el.x),py=esy(el.y),pw=esl(el.w||0),ph=esl(el.h||0);
+        const pw=esl(el.w||0),ph=esl(el.h||0);
         if(Math.abs(pw)<1||Math.abs(ph)<1){ectx.restore();continue;}
+        const cx=esx(el.x+(el.w||0)/2), cy=esy(el.y+(el.h||0)/2);
+        ectx.save(); ectx.translate(cx,cy); ectx.rotate((el.rot||0)*Math.PI/180);
         ectx.fillStyle='rgba(0,0,0,.04)';
-        ectx.fillRect(px,py,pw,ph);
+        ectx.fillRect(-pw/2,-ph/2,pw,ph);
         ectx.lineWidth=1.5; ectx.strokeStyle=ecol;
-        ectx.strokeRect(px,py,pw,ph);
+        ectx.strokeRect(-pw/2,-ph/2,pw,ph);
+        ectx.restore();
         break;
       }
       case 'circ':{
@@ -1763,7 +1954,7 @@ function generateSVG(){
     s+=`<line x1="0" y1="${esy(y)}" x2="${W2}" y2="${esy(y)}"/>`;
   s+=`</g>`;
 
-  for(const el of S.els){
+  for(const el of drawOrder()){
     switch(el.type){
       case 'wall':{
         const x1=esx(el.x1),y1=esy(el.y1),x2=esx(el.x2),y2=esy(el.y2);
@@ -1851,7 +2042,8 @@ function generateSVG(){
       case 'rect':{
         const px=esx(el.x),py=esy(el.y),pw=esl(el.w||0),ph=esl(el.h||0);
         if(!pw||!ph) break;
-        s+=`<rect x="${px}" y="${py}" width="${pw}" height="${ph}" fill="rgba(0,0,0,0.04)" stroke="${el.color||'black'}" stroke-width="1.5"/>`;
+        const cx=esx(el.x+(el.w||0)/2), cy=esy(el.y+(el.h||0)/2);
+        s+=`<rect x="${px}" y="${py}" width="${pw}" height="${ph}" fill="rgba(0,0,0,0.04)" stroke="${el.color||'black'}" stroke-width="1.5" transform="rotate(${el.rot||0},${cx},${cy})"/>`;
         break;
       }
       case 'circ':{
@@ -1944,6 +2136,7 @@ document.getElementById('filin').addEventListener('change', e=>{
       pushUndo();
       if(d.state){ S={ els:[], nid:1, ...d.state }; }
       if(d.viewport){ VP={...VP,...d.viewport}; }
+      ensureLayers();
       saveL(); render(); closePP();
       alert('Imported successfully.');
     } catch(err){
@@ -1967,7 +2160,7 @@ document.addEventListener('keydown', e=>{
   if((e.ctrlKey||e.metaKey)&&(e.key==='v'||e.key==='V')){ e.preventDefault(); pasteClip(); return; }
   if(e.key==='Escape'){
     if(UI.condPts) finishCond();
-    UI.draw=null; closePP(); closeModal(); reqRender(); return;
+    UI.draw=null; closePP(); closeLP(); closeModal(); reqRender(); return;
   }
   if((e.key==='Delete'||e.key==='Backspace')&&UI.selId){ delEl(UI.selId); return; }
   if(!e.ctrlKey&&!e.metaKey&&(e.key==='l'||e.key==='L')&&UI.selId){ e.preventDefault(); toggleLock(UI.selId); return; }
