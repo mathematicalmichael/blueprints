@@ -1332,7 +1332,7 @@ cv.addEventListener('wheel',e=>{
   // event made zooming feel wildly over-sensitive there. Clamp deltaY so one
   // big flick (large delta spikes on some mice) can't jump the zoom too far.
   const dy=Math.max(-100,Math.min(100,e.deltaY));
-  const f=Math.exp(-dy*0.0009*UI.zoomSens);
+  const f=Math.exp(-dy*0.0013*UI.zoomSens);
   VP.z=Math.max(MINZ,Math.min(MAXZ,VP.z*f));
   VP.x+=wx0-wcx(p.sx); VP.y+=wy0-wcy(p.sy);
   saveL(); reqRender();
