@@ -1310,7 +1310,12 @@ cv.addEventListener('wheel',e=>{
   e.preventDefault();
   const p=gpos(e);
   const wx0=wcx(p.sx),wy0=wcy(p.sy);
-  const f=e.deltaY<0?1.12:0.893;
+  // Scale zoom to the actual scroll distance instead of a fixed step per event —
+  // trackpads fire many small-delta events per gesture, so a fixed factor per
+  // event made zooming feel wildly over-sensitive there. Clamp deltaY so one
+  // big flick (large delta spikes on some mice) can't jump the zoom too far.
+  const dy=Math.max(-100,Math.min(100,e.deltaY));
+  const f=Math.exp(-dy*0.0009);
   VP.z=Math.max(MINZ,Math.min(MAXZ,VP.z*f));
   VP.x+=wx0-wcx(p.sx); VP.y+=wy0-wcy(p.sy);
   saveL(); reqRender();
