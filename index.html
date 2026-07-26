@@ -49,6 +49,7 @@ html, body {
 .hb:hover, .hb:active { background: rgba(79,195,247,0.2); }
 .hb.red { color: #ff7b6b; border-color: rgba(255,123,107,.3); }
 .hb.red:hover { background: rgba(255,107,53,.18); }
+.hb.on { background:var(--accent); border-color:var(--accent); color:#fff; }
 .hsep { width:1px; height:18px; background:var(--border); flex-shrink:0; }
 
 /* ── Canvas ── */
@@ -220,6 +221,7 @@ canvas { display:block; width:100%; height:100%; touch-action:none; }
     <div class="hsep"></div>
     <button class="hb" id="btheme" title="Toggle display style">🌙</button>
     <button class="hb" id="bgrid" title="Toggle grid">⊞</button>
+    <button class="hb" id="bedit" title="Toggle edit mode (click opens properties panel; off = click just selects/drags)">✏️ Edit</button>
     <button class="hb" id="blayers" title="Layers">⧉ Layers</button>
     <div class="hsep"></div>
     <div id="wt-row">
@@ -328,7 +330,7 @@ const TLBL = { wall:'Line',door:'Door',window:'Window',beam:'Support Beam',
                rect:'Rectangle',circ:'Circle' };
 
 const HINTS = {
-  select:'Tap to select · Drag to move · Dbl-tap to edit · L = lock · Ctrl+C/V = copy/paste',
+  select:'Tap to select · Drag to move · Dbl-tap to edit · ✏️ Edit Mode = auto-open panel · L = lock · Ctrl+C/V = copy/paste',
   wall:'Drag to draw · Shift = orthogonal · Snaps to grid · Set exact Length/Thickness in properties',
   door:'Drag to place door (sets width & direction)',
   window:'Drag along wall to define window',
@@ -347,7 +349,7 @@ const HINTS = {
 let S = { els:[], nid:1 };          // persistent state
 let VP = { x:0, y:0, z:DZOOM };    // viewport (x,y = world at canvas center, z = px/in)
 let UI = {
-  tool:T.SEL, selId:null, hovId:null,
+  tool:T.SEL, selId:null, hovId:null, editMode:false,
   draw:null,          // in-progress draw preview
   condPts:null,       // in-progress conduit points
   curW:null,          // cursor world pos (snapped)
@@ -1493,7 +1495,7 @@ function toolDbl(cwx2,cwy2){
   if(UI.tool===T.COND){ finishCond(); return; }
   if(UI.tool===T.SEL){
     const el=hitTest(cwx2,cwy2);
-    if(el) showAnnoModal(el);
+    if(el){ UI.selId=el.id; showPP(el); render(); }
   }
 }
 
@@ -1530,12 +1532,16 @@ function selDown(cwx2,cwy2){
     UI.dragSnap=snapSt();
     const an=anchorW(el);
     UI.dragOffW={x:cwx2-an.x, y:cwy2-an.y};
-    showPP(el); render();
+    // A single click just selects/drags; opening the properties panel here would cover
+    // the canvas and get in the way of dragging. Edit Mode or a double-click opens it.
+    if(UI.editMode) showPP(el); else closePP();
+    render();
   } else if(el && elLocked(el)){
-    // Locked: select & show properties (to unlock), but never move — drag pans.
+    // Locked: select (never move — drag pans), show properties only in Edit Mode.
     UI.selId=el.id; UI.dragEl=null;
     UI.vpDrag={x:VP.x,y:VP.y,sx:ptr.sx0,sy:ptr.sy0};
-    showPP(el); render();
+    if(UI.editMode) showPP(el); else closePP();
+    render();
   } else {
     UI.selId=null; UI.dragEl=null;
     UI.vpDrag={x:VP.x,y:VP.y,sx:ptr.sx0,sy:ptr.sy0};
@@ -2543,6 +2549,13 @@ document.getElementById('btheme').addEventListener('click',()=>{
 
 document.getElementById('bgrid').addEventListener('click',()=>{
   UI.grid=!UI.grid; reqRender();
+});
+
+document.getElementById('bedit').addEventListener('click',()=>{
+  UI.editMode=!UI.editMode;
+  document.getElementById('bedit').classList.toggle('on', UI.editMode);
+  if(UI.editMode && UI.selId){ const el=getEl(UI.selId); if(el) showPP(el); }
+  else if(!UI.editMode){ closePP(); }
 });
 
 document.getElementById('bexpjson').addEventListener('click', exportJSON);
