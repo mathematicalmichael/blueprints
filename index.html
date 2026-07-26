@@ -2525,6 +2525,18 @@ document.addEventListener('keydown', e=>{
     UI.draw=null; closePP(); closeLP(); closeModal(); reqRender(); return;
   }
   if((e.key==='Delete'||e.key==='Backspace')&&UI.selId){ delEl(UI.selId); return; }
+  if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key)&&UI.selId){
+    const el=getEl(UI.selId);
+    if(el && !elLocked(el)){
+      e.preventDefault();
+      // Fine 0.25" nudges are only visible/useful once zoomed in; zoomed out, snap to a full inch.
+      const step=VP.z>=DZOOM?SNAP:1;
+      const dx=e.key==='ArrowLeft'?-step:e.key==='ArrowRight'?step:0;
+      const dy=e.key==='ArrowUp'?-step:e.key==='ArrowDown'?step:0;
+      pushUndo(); moveEl(el,dx,dy); saveL(); reqRender();
+    }
+    return;
+  }
   if(!e.ctrlKey&&!e.metaKey&&(e.key==='l'||e.key==='L')&&UI.selId){ e.preventDefault(); toggleLock(UI.selId); return; }
   if(e.key==='+'||e.key==='='){ VP.z=Math.min(MAXZ,VP.z*1.2); saveL(); reqRender(); }
   if(e.key==='-'){ VP.z=Math.max(MINZ,VP.z/1.2); saveL(); reqRender(); }
