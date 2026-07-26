@@ -1228,6 +1228,24 @@ cv.addEventListener('mousedown',e=>{
 },{passive:false});
 
 cv.addEventListener('mousemove',e=>{
+  if(ptr.down) return;   // active drag is handled by the document-level listener below
+  e.preventDefault();
+  const p=gpos(e);
+  const [cwx2,cwy2]=snapGP(wcx(p.sx),wcy(p.sy));
+  UI.curW={x:cwx2,y:cwy2}; UI.shift=e.shiftKey;
+  toolHover(cwx2,cwy2);
+  reqRender();
+},{passive:false});
+
+cv.addEventListener('mouseleave',()=>{ if(!ptr.down){ UI.hovId=null; reqRender(); } });
+
+// Once a mouse drag starts, track it on `document` rather than `cv`: selecting a shape
+// opens the properties panel (a fixed-position sibling of the canvas) immediately, which
+// can slide up and visually cover the cursor mid-drag. Since it isn't a descendant of the
+// canvas, `cv`-only listeners would stop receiving mousemove/mouseup once that happens,
+// silently killing the drag (this is what broke rectangle-drag in Chrome/Safari).
+document.addEventListener('mousemove',e=>{
+  if(!ptr.down) return;
   e.preventDefault();
   const p=gpos(e);
   const dx=p.sx-ptr.sxL, dy=p.sy-ptr.syL;
@@ -1235,20 +1253,18 @@ cv.addEventListener('mousemove',e=>{
   ptr.sxL=p.sx; ptr.syL=p.sy;
   const [cwx2,cwy2]=snapGP(wcx(p.sx),wcy(p.sy));
   UI.curW={x:cwx2,y:cwy2}; UI.shift=e.shiftKey;
-  if(ptr.down) toolDrag(cwx2,cwy2,dx,dy);
-  else         toolHover(cwx2,cwy2);
+  toolDrag(cwx2,cwy2,dx,dy);
   reqRender();
 },{passive:false});
 
-cv.addEventListener('mouseup',e=>{
+document.addEventListener('mouseup',e=>{
+  if(!ptr.down) return;
   e.preventDefault();
   const p=gpos(e);
   const [cwx2,cwy2]=snapGP(wcx(p.sx),wcy(p.sy));
-  if(ptr.down) toolUp(cwx2,cwy2,ptr.moved);
+  toolUp(cwx2,cwy2,ptr.moved);
   ptr.down=false; reqRender();
 },{passive:false});
-
-cv.addEventListener('mouseleave',()=>{ ptr.down=false; UI.hovId=null; reqRender(); });
 
 cv.addEventListener('contextmenu',e=>{
   e.preventDefault();
