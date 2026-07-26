@@ -477,6 +477,7 @@ function loadL(){
     if(d.VP){ VP={...VP,...d.VP}; }
   }catch(_){}
   ensureLayers();
+  ensureWindows();
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -495,6 +496,7 @@ function applySt(snap){
   S.els=d.els; S.nid=d.nid;
   if(d.layers){ S.layers=d.layers; S.nlid=d.nlid; }
   ensureLayers();
+  ensureWindows();
   UI.selId=null; saveL(); render(); closePP();
   if(document.getElementById('lp').classList.contains('open')) renderLayerList();
 }
@@ -525,6 +527,21 @@ function ensureLayers(){
   const def=S.layers[0].id;
   for(const el of S.els){ if(!el.layer || !S.layers.some(l=>l.id===el.layer)) el.layer=def; }
   if(!UI.activeLayer || !S.layers.some(l=>l.id===UI.activeLayer)) UI.activeLayer=def;
+}
+
+// Windows are defined by a start point + length + direction: {x,y,len,ang}.
+// Backward compatible: older saves store windows as a pair of endpoints
+// {x1,y1,x2,y2} → migrate those in place to the new start+length form.
+function ensureWindows(){
+  for(const el of S.els){
+    if(el.type!=='window' || el.len!=null) continue;
+    if(el.x1==null) continue;
+    const dx=el.x2-el.x1, dy=el.y2-el.y1;
+    el.x=el.x1; el.y=el.y1;
+    el.len=Math.hypot(dx,dy);
+    el.ang=Math.atan2(dy,dx)*180/Math.PI;
+    delete el.x1; delete el.y1; delete el.x2; delete el.y2;
+  }
 }
 
 function getLayer(id){ return S.layers && S.layers.find(l=>l.id===id) || null; }
@@ -568,7 +585,7 @@ function delEl(id){
 
 function moveEl(el, dx, dy){
   switch(el.type){
-    case 'wall': case 'window':
+    case 'wall':
       el.x1=snap1(el.x1+dx); el.y1=snap1(el.y1+dy);
       el.x2=snap1(el.x2+dx); el.y2=snap1(el.y2+dy); break;
     case 'conduit':
@@ -580,10 +597,17 @@ function moveEl(el, dx, dy){
 
 function anchorW(el){
   switch(el.type){
-    case 'wall': case 'window': return {x:el.x1, y:el.y1};
+    case 'wall': return {x:el.x1, y:el.y1};
     case 'conduit': return (el.pts&&el.pts[0])||{x:0,y:0};
     default: return {x:el.x, y:el.y};
   }
+}
+
+// Window end point, derived from its start point (x,y), length (len) and
+// direction (ang, degrees) — the canonical "start + length" representation.
+function winEnd(el){
+  const a=(el.ang||0)*Math.PI/180;
+  return { x: el.x + Math.cos(a)*(el.len||0), y: el.y + Math.sin(a)*(el.len||0) };
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -655,9 +679,11 @@ function bounds(el){
         y2:Math.max(el.y1,el.y2,el.y1+oy,el.y2+oy)
       };
     }
-    case 'window':
-      return { x1:Math.min(el.x1,el.x2), y1:Math.min(el.y1,el.y2),
-               x2:Math.max(el.x1,el.x2), y2:Math.max(el.y1,el.y2) };
+    case 'window': {
+      const e2=winEnd(el);
+      return { x1:Math.min(el.x,e2.x), y1:Math.min(el.y,e2.y),
+               x2:Math.max(el.x,e2.x), y2:Math.max(el.y,e2.y) };
+    }
     case 'beam': case 'light':
       return boxBounds(el);
     case 'rect':
@@ -719,7 +745,7 @@ function hitEl(el, wx2, wy2){
       const comp=(wx2-nx)*ox+(wy2-ny)*oy;
       return comp>=-pad&&comp<=t+pad;
     }
-    case 'window': return ptSegD(wx2,wy2,el.x1,el.y1,el.x2,el.y2) <= pad*2.5;
+    case 'window': { const e2=winEnd(el); return ptSegD(wx2,wy2,el.x,el.y,e2.x,e2.y) <= pad*2.5; }
     case 'door':   return Math.hypot(wx2-el.x,wy2-el.y) <= (el.width||30)+pad;
     case 'beam': case 'light': case 'rect': {
       // Test in the box's own (un-rotated) frame so rotated boxes hit correctly.
@@ -953,16 +979,15 @@ function rDoor(el,clr){
 }
 
 function rWin(el,clr){
-  const x1=scx(el.x1),y1=scy(el.y1),x2=scx(el.x2),y2=scy(el.y2);
-  const dx=x2-x1,dy=y2-y1,len=Math.hypot(dx,dy);
-  if(len<1) return;
-  const a=Math.atan2(dy,dx),cx=(x1+x2)/2,cy=(y1+y2)/2;
+  const x1=scx(el.x),y1=scy(el.y),len=scl(el.len||0);
+  if(Math.abs(len)<1) return;
+  const a=(el.ang||0)*Math.PI/180;
   const dep=Math.max(4,Math.min(12,VP.z*1.8));
   ctx.save();
-  ctx.translate(cx,cy); ctx.rotate(a);
+  ctx.translate(x1,y1); ctx.rotate(a);
   ctx.strokeStyle=clr; ctx.lineWidth=1.5;
-  ctx.strokeRect(-len/2,-dep/2,len,dep);
-  ctx.beginPath(); ctx.moveTo(-len/2,0); ctx.lineTo(len/2,0); ctx.stroke();
+  ctx.strokeRect(0,-dep/2,len,dep);
+  ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(len,0); ctx.stroke();
   ctx.restore();
 }
 
@@ -1131,14 +1156,13 @@ function drawPrev(d,p){
       ctx.restore(); break;
     }
     case 'window':{
-      const x1=scx(d.x1),y1=scy(d.y1),x2=scx(d.x2),y2=scy(d.y2);
-      const dx=x2-x1,dy=y2-y1,len=Math.hypot(dx,dy);
+      const x1=scx(d.x),y1=scy(d.y),len=scl(d.len||0);
       if(len>1){
-        const a=Math.atan2(dy,dx),cx=(x1+x2)/2,cy=(y1+y2)/2;
+        const a=(d.ang||0)*Math.PI/180;
         const dep=Math.max(4,Math.min(12,VP.z*1.8));
-        ctx.save(); ctx.translate(cx,cy); ctx.rotate(a);
-        ctx.strokeRect(-len/2,-dep/2,len,dep);
-        ctx.beginPath(); ctx.moveTo(-len/2,0); ctx.lineTo(len/2,0); ctx.stroke();
+        ctx.save(); ctx.translate(x1,y1); ctx.rotate(a);
+        ctx.strokeRect(0,-dep/2,len,dep);
+        ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(len,0); ctx.stroke();
         ctx.restore();
       }
       break;
@@ -1337,7 +1361,7 @@ function toolDown(cwx2,cwy2){
     case T.DOOR:
       UI.draw={type:'door',x:cwx2,y:cwy2,width:30,rot:0,flip:false}; break;
     case T.WIN:
-      UI.draw={type:'window',x1:cwx2,y1:cwy2,x2:cwx2,y2:cwy2}; break;
+      UI.draw={type:'window',x:cwx2,y:cwy2,len:0,ang:0}; break;
     case T.BEAM:
       UI.draw={type:'beam',x:cwx2,y:cwy2,w:0,h:0}; break;
     case T.LIGHT:
@@ -1378,7 +1402,12 @@ function toolDrag(cwx2,cwy2,dx,dy){
       }
       break;
     case T.WIN:
-      if(UI.draw){ UI.draw.x2=cwx2; UI.draw.y2=cwy2; } break;
+      if(UI.draw){
+        const ddx=cwx2-UI.draw.x, ddy=cwy2-UI.draw.y;
+        UI.draw.len=Math.hypot(ddx,ddy);
+        UI.draw.ang=Math.atan2(ddy,ddx)*180/Math.PI;
+      }
+      break;
     case T.BEAM: case T.LIGHT:
       if(UI.draw){ UI.draw.w=cwx2-UI.draw.x; UI.draw.h=cwy2-UI.draw.y; } break;
     case T.RECT:
@@ -1404,9 +1433,9 @@ function toolUp(cwx2,cwy2,moved){
       }
       UI.draw=null; break;
     case T.WIN:
-      if(UI.draw&&Math.hypot(UI.draw.x2-UI.draw.x1,UI.draw.y2-UI.draw.y1)>=SNAP){
+      if(UI.draw&&UI.draw.len>=SNAP){
         pushUndo();
-        addEl('window',{x1:UI.draw.x1,y1:UI.draw.y1,x2:UI.draw.x2,y2:UI.draw.y2});
+        addEl('window',{x:UI.draw.x,y:UI.draw.y,len:UI.draw.len,ang:UI.draw.ang});
       }
       UI.draw=null; break;
     case T.BEAM: case T.LIGHT:
@@ -1555,12 +1584,12 @@ function showPP(el){
       if(isDim){
         const parsed=parseDim(inp.value);
         if(parsed==null){                     // couldn't parse → restore prior value
-          const prior = p==='len' ? Math.hypot(cur.x2-cur.x1,cur.y2-cur.y1) : cur[p];
+          const prior = (p==='len'&&cur.type==='wall') ? Math.hypot(cur.x2-cur.x1,cur.y2-cur.y1) : cur[p];
           inp.value=fmtIn(prior||0); return;
         }
         const v=snap1(parsed);
         pushOnce();
-        if(p==='len'){                         // set wall length along its direction
+        if(p==='len'&&cur.type==='wall'){       // set wall length along its direction
           let ang=Math.atan2(cur.y2-cur.y1,cur.x2-cur.x1);
           if(!isFinite(ang)||(cur.x1===cur.x2&&cur.y1===cur.y2)) ang=0;
           setEl(el.id,{x2:snap1(cur.x1+Math.cos(ang)*v), y2:snap1(cur.y1+Math.sin(ang)*v)});
@@ -1601,7 +1630,7 @@ function buildPPF(el){
   h+=row('Label', ti('lbl',el.lbl,'Optional label'));
   h+=row2(cell('Lock', ci('locked',el.locked)), cell('Layer', sel));
   // Position fields — paired X/Y per row
-  if(el.type==='wall'||el.type==='window'){
+  if(el.type==='wall'){
     h+=row2(cell('X1', di('x1',el.x1)), cell('Y1', di('y1',el.y1)));
     h+=row2(cell('X2', di('x2',el.x2)), cell('Y2', di('y2',el.y2)));
   } else if(el.type!=='conduit'){
@@ -1615,6 +1644,9 @@ function buildPPF(el){
     case 'door':
       h+=row2(cell('Width', di('width',el.width??30)), cell('Rot°', ni('rot',el.rot??0,-360,360,15)));
       h+=row2(cell('Flip', ci('flip',el.flip)), '');
+      break;
+    case 'window':
+      h+=row2(cell('Length', di('len',el.len??0)), cell('Angle°', ni('ang',el.ang??0,-360,360,15)));
       break;
     case 'beam': case 'light':
       h+=row2(cell('Width', di('w',el.w??12)), cell('Height', di('h',el.h??12)));
@@ -2064,14 +2096,13 @@ function drawExport(ectx, ox, oy, z){
         ectx.restore(); break;
       }
       case 'window':{
-        const x1=esx(el.x1),y1=esy(el.y1),x2=esx(el.x2),y2=esy(el.y2);
-        const dx=x2-x1,dy=y2-y1,len=Math.hypot(dx,dy);
+        const x1=esx(el.x),y1=esy(el.y),len=esl(el.len||0);
         if(len<1){ectx.restore();continue;}
-        const a=Math.atan2(dy,dx),cx=(x1+x2)/2,cy=(y1+y2)/2;
+        const a=(el.ang||0)*Math.PI/180;
         const dep=Math.max(4,esl(4));
-        ectx.save();ectx.translate(cx,cy);ectx.rotate(a);
-        ectx.strokeRect(-len/2,-dep/2,len,dep);
-        ectx.beginPath();ectx.moveTo(-len/2,0);ectx.lineTo(len/2,0);ectx.stroke();
+        ectx.save();ectx.translate(x1,y1);ectx.rotate(a);
+        ectx.strokeRect(0,-dep/2,len,dep);
+        ectx.beginPath();ectx.moveTo(0,0);ectx.lineTo(len,0);ectx.stroke();
         ectx.restore(); break;
       }
       case 'beam':{
@@ -2269,15 +2300,13 @@ function generateSVG(){
         break;
       }
       case 'window':{
-        const x1=esx(el.x1),y1=esy(el.y1),x2=esx(el.x2),y2=esy(el.y2);
-        const dx=x2-x1,dy=y2-y1,len=Math.hypot(dx,dy);
+        const x1=esx(el.x),y1=esy(el.y),len=esl(el.len||0);
         if(len<1) break;
-        const a=Math.atan2(dy,dx)*180/Math.PI;
-        const cx=(x1+x2)/2,cy=(y1+y2)/2;
+        const a=el.ang||0;
         const dep=Math.max(4,esl(4));
-        s+=`<g transform="translate(${cx},${cy}) rotate(${a})">`;
-        s+=`<rect x="${-len/2}" y="${-dep/2}" width="${len}" height="${dep}" stroke="black" stroke-width="1.5" fill="none"/>`;
-        s+=`<line x1="${-len/2}" y1="0" x2="${len/2}" y2="0" stroke="black" stroke-width="1.5"/>`;
+        s+=`<g transform="translate(${x1},${y1}) rotate(${a})">`;
+        s+=`<rect x="0" y="${-dep/2}" width="${len}" height="${dep}" stroke="black" stroke-width="1.5" fill="none"/>`;
+        s+=`<line x1="0" y1="0" x2="${len}" y2="0" stroke="black" stroke-width="1.5"/>`;
         s+=`</g>`;
         break;
       }
@@ -2425,6 +2454,7 @@ document.getElementById('filin').addEventListener('change', e=>{
       if(d.state){ S={ els:[], nid:1, ...d.state }; }
       if(d.viewport){ VP={...VP,...d.viewport}; }
       ensureLayers();
+      ensureWindows();
       saveL(); render(); closePP();
       alert('Imported successfully.');
     } catch(err){
