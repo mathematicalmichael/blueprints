@@ -50,6 +50,9 @@ html, body {
 .hb.red { color: #ff7b6b; border-color: rgba(255,123,107,.3); }
 .hb.red:hover { background: rgba(255,107,53,.18); }
 .hb.on { background:var(--accent); border-color:var(--accent); color:#fff; }
+#zs-input { accent-color:var(--accent); vertical-align:middle; width:70px; }
+#zs-label, #zs-val { font-size:10px; color:var(--muted); white-space:nowrap; }
+#zs-val { min-width:28px; display:inline-block; text-align:right; }
 .hsep { width:1px; height:18px; background:var(--border); flex-shrink:0; }
 
 /* ── Canvas ── */
@@ -219,6 +222,10 @@ canvas { display:block; width:100%; height:100%; touch-action:none; }
     <button class="hb" id="bzout">－</button>
     <button class="hb" id="bfit">⊡ Fit</button>
     <div class="hsep"></div>
+    <span id="zs-label" title="Scroll-wheel zoom sensitivity">🖱️ Zoom</span>
+    <input id="zs-input" type="range" min="0.2" max="3" step="0.1" value="1" title="Scroll-wheel zoom sensitivity">
+    <span id="zs-val">1.0×</span>
+    <div class="hsep"></div>
     <button class="hb" id="btheme" title="Toggle display style">🌙</button>
     <button class="hb" id="bgrid" title="Toggle grid">⊞</button>
     <button class="hb" id="bedit" title="Toggle edit mode (click opens properties panel; off = click just selects/drags)">✏️ Edit</button>
@@ -319,6 +326,7 @@ const MINZ   = 0.2;         // allow zooming out far enough to see 10' grid
 const MAXZ   = 128;
 const DWALT  = 3.5;         // default wall/line thickness (inches – 2x4 stud wall)
 const SKEY   = 'bp_v3';
+const ZSKEY  = 'bp_zoomsens';  // wheel-zoom sensitivity multiplier — a browser preference, not part of the document
 const MXUNDO = 40;
 
 const T = { SEL:'select',WALL:'wall',DOOR:'door',WIN:'window',BEAM:'beam',
@@ -349,7 +357,7 @@ const HINTS = {
 let S = { els:[], nid:1 };          // persistent state
 let VP = { x:0, y:0, z:DZOOM };    // viewport (x,y = world at canvas center, z = px/in)
 let UI = {
-  tool:T.SEL, selId:null, hovId:null, editMode:false,
+  tool:T.SEL, selId:null, hovId:null, editMode:false, zoomSens:1,
   draw:null,          // in-progress draw preview
   condPts:null,       // in-progress conduit points
   curW:null,          // cursor world pos (snapped)
@@ -480,6 +488,15 @@ function loadL(){
   }catch(_){}
   ensureLayers();
   ensureWindows();
+}
+function loadZoomSens(){
+  try{
+    const v=parseFloat(localStorage.getItem(ZSKEY));
+    if(isFinite(v)&&v>0) UI.zoomSens=v;
+  }catch(_){}
+}
+function saveZoomSens(){
+  try{ localStorage.setItem(ZSKEY, String(UI.zoomSens)); }catch(_){}
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1315,7 +1332,7 @@ cv.addEventListener('wheel',e=>{
   // event made zooming feel wildly over-sensitive there. Clamp deltaY so one
   // big flick (large delta spikes on some mice) can't jump the zoom too far.
   const dy=Math.max(-100,Math.min(100,e.deltaY));
-  const f=Math.exp(-dy*0.0009);
+  const f=Math.exp(-dy*0.0009*UI.zoomSens);
   VP.z=Math.max(MINZ,Math.min(MAXZ,VP.z*f));
   VP.x+=wx0-wcx(p.sx); VP.y+=wy0-wcy(p.sy);
   saveL(); reqRender();
@@ -2581,10 +2598,17 @@ document.getElementById('wt-input').addEventListener('input', e=>{
   UI.defWallT=Math.max(0.25,v);
 });
 
+document.getElementById('zs-input').addEventListener('input', e=>{
+  UI.zoomSens=parseFloat(e.target.value)||1;
+  document.getElementById('zs-val').textContent=UI.zoomSens.toFixed(1)+'×';
+  saveZoomSens();
+});
+
 // ═══════════════════════════════════════════════════════════════
 // INIT
 // ═══════════════════════════════════════════════════════════════
 loadL();
+loadZoomSens();
 resize();
 setTool(T.SEL);
 
@@ -2592,6 +2616,8 @@ setTool(T.SEL);
 document.getElementById('hint').textContent = HINTS[T.SEL];
 document.getElementById('btheme').textContent = UI.bp?'🌙':'☀️';
 document.getElementById('wt-input').value = UI.defWallT;
+document.getElementById('zs-input').value = UI.zoomSens;
+document.getElementById('zs-val').textContent = UI.zoomSens.toFixed(1)+'×';
 
 </script>
 </body>
