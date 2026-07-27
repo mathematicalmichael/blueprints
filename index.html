@@ -1656,7 +1656,14 @@ function showPP(el){
   lpRefresh();   // reflect the newly-selected object in the layers tree
 }
 
-function closePP(){ document.getElementById('pp').classList.remove('open'); lpRefresh(); }
+function closePP(){
+  const pp=document.getElementById('pp');
+  // A focused field (e.g. the Rot° number input) stays focused even once the panel is
+  // hidden, so arrow keys would keep nudging that field's value instead of moving the
+  // selected element. Blur it on close so keyboard focus returns to the canvas.
+  if(pp.contains(document.activeElement)) document.activeElement.blur();
+  pp.classList.remove('open'); lpRefresh();
+}
 
 function buildPPF(el){
   const row=(l,h)=>`<div class="pr"><span class="pl">${l}</span>${h}</div>`;   // full-width row
